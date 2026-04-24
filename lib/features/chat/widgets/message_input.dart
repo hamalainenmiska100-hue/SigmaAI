@@ -2,12 +2,18 @@ import 'package:flutter/material.dart';
 
 class MessageInput extends StatefulWidget {
   final bool enabled;
-  final ValueChanged<String> onSend;
+  final Future<void> Function(String text) onSend;
+  final Future<void> Function() onPickImage;
+  final bool hasPendingImage;
+  final VoidCallback onRemoveImage;
 
   const MessageInput({
     super.key,
     required this.enabled,
     required this.onSend,
+    required this.onPickImage,
+    required this.hasPendingImage,
+    required this.onRemoveImage,
   });
 
   @override
@@ -17,15 +23,15 @@ class MessageInput extends StatefulWidget {
 class _MessageInputState extends State<MessageInput> {
   final controller = TextEditingController();
 
-  void submit() {
+  Future<void> submit() async {
     final text = controller.text.trim();
 
-    if (text.isEmpty || !widget.enabled) {
+    if ((text.isEmpty && !widget.hasPendingImage) || !widget.enabled) {
       return;
     }
 
     controller.clear();
-    widget.onSend(text);
+    await widget.onSend(text);
   }
 
   @override
@@ -41,46 +47,58 @@ class _MessageInputState extends State<MessageInput> {
     return SafeArea(
       top: false,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 260),
         curve: Curves.easeOutCubic,
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
         color: colors.surface,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: controller,
-                enabled: widget.enabled,
-                minLines: 1,
-                maxLines: 5,
-                textInputAction: TextInputAction.newline,
-                decoration: InputDecoration(
-                  hintText: widget.enabled ? 'Message SigmaAI...' : 'Generating response...',
+            if (widget.hasPendingImage)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.image_outlined, size: 18),
+                    const SizedBox(width: 8),
+                    const Expanded(child: Text('Photo attached')),
+                    IconButton(
+                      onPressed: widget.onRemoveImage,
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: widget.enabled
-                  ? IconButton.filled(
-                      key: const ValueKey('send'),
-                      onPressed: submit,
-                      icon: const Icon(Icons.arrow_upward),
-                    )
-                  : IconButton(
-                      key: const ValueKey('loading'),
-                      onPressed: null,
-                      icon: SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  onPressed: widget.enabled ? widget.onPickImage : null,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    enabled: widget.enabled,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    decoration: InputDecoration(
+                      hintText: widget.enabled ? 'Message Sigma...' : 'Generating response...',
                     ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: widget.enabled ? submit : null,
+                  icon: const Icon(Icons.arrow_upward),
+                ),
+              ],
             ),
           ],
         ),

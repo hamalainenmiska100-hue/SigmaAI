@@ -1,5 +1,5 @@
 name: sigmaai
-description: SigmaAI chat app
+description: Sigma chat app
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -16,6 +16,8 @@ dependencies:
   share_plus: ^10.0.0
   uuid: ^4.4.0
   intl: ^0.19.0
+  file_picker: ^8.1.2
+  image: ^4.3.0
 
 dev_dependencies:
   flutter_test:

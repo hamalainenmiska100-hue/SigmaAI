@@ -15,6 +15,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _service = SettingsService(LocalStorageService());
   final _controller = TextEditingController();
+  final _nameController = TextEditingController();
+  double _bubbleRadius = 24;
 
   @override
   void initState() {
@@ -31,26 +33,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _save() async {
     await _service.saveCustomInstructions(_controller.text.trim());
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Instructions saved')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preferences saved')));
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _nameController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('Customize Sigma')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const SectionTitle(title: 'Custom Instructions'),
+          const SectionTitle(title: 'Profile'),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _nameController,
+            decoration: const InputDecoration(hintText: 'Display name (local)'),
+          ),
+          const SizedBox(height: 18),
+          const SectionTitle(title: 'Look & Feel'),
+          const SizedBox(height: 6),
+          Text('Bubble roundness ${_bubbleRadius.round()}'),
+          Slider(
+            value: _bubbleRadius,
+            min: 14,
+            max: 36,
+            onChanged: (v) => setState(() => _bubbleRadius = v),
+          ),
+          const SizedBox(height: 18),
+          const SectionTitle(title: 'Assistant behavior'),
           const SizedBox(height: 8),
           Text(
-            'Tell SigmaAI how you want it to respond.',
+            'System guidance sent with each request.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -60,7 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             maxLines: 10,
             maxLength: AppConfig.maxCustomInstructionsLength,
             decoration: const InputDecoration(
-              hintText: 'Example: Keep answers short and simple.',
+              hintText: 'Example: Keep answers concise and include bullet points.',
             ),
           ),
           const SizedBox(height: 12),
@@ -68,7 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             alignment: Alignment.centerLeft,
             child: FilledButton(
               onPressed: _save,
-              child: const Text('Save Instructions'),
+              child: const Text('Save Preferences'),
             ),
           ),
         ],

@@ -9,7 +9,7 @@ class SigmaAIApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SigmaAI',
+      title: 'Sigma',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
       home: const MainShell(),
