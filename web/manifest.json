@@ -1,0 +1,10 @@
+{
+  "name": "SigmaAI",
+  "short_name": "SigmaAI",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0175C2",
+  "theme_color": "#0175C2",
+  "description": "SigmaAI web app.",
+  "orientation": "portrait-primary"
+}
