@@ -15,8 +15,6 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _service = SettingsService(LocalStorageService());
   final _controller = TextEditingController();
-  final _nameController = TextEditingController();
-  double _bubbleRadius = 24;
 
   @override
   void initState() {
@@ -39,34 +37,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _controller.dispose();
-    _nameController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Customize Sigma')),
+      appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const SectionTitle(title: 'Profile'),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(hintText: 'Display name (local)'),
-          ),
-          const SizedBox(height: 18),
-          const SectionTitle(title: 'Look & Feel'),
-          const SizedBox(height: 6),
-          Text('Bubble roundness ${_bubbleRadius.round()}'),
-          Slider(
-            value: _bubbleRadius,
-            min: 14,
-            max: 36,
-            onChanged: (v) => setState(() => _bubbleRadius = v),
-          ),
-          const SizedBox(height: 18),
           const SectionTitle(title: 'Assistant behavior'),
           const SizedBox(height: 8),
           Text(
@@ -88,7 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             alignment: Alignment.centerLeft,
             child: FilledButton(
               onPressed: _save,
-              child: const Text('Save Preferences'),
+              child: const Text('Save Settings'),
             ),
           ),
         ],
