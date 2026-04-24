@@ -50,3 +50,16 @@ This MVP stores data locally with `shared_preferences`:
 - Video generation
 - Audio generation
 - Binary and media artifact files
+
+## iOS build
+
+You can generate iOS platform files and build a release app bundle with:
+
+```bash
+flutter pub get
+flutter create --platforms=ios .
+flutter build ios --release --no-codesign
+```
+
+This repository also includes a GitHub Actions workflow (`.github/workflows/build-ios.yml`)
+that builds iOS on `macos-latest` and uploads `build/ios` as an artifact.

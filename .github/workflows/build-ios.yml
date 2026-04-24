@@ -1,0 +1,35 @@
+name: Build Flutter iOS App
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate iOS platform project
+        run: flutter create --platforms=ios .
+
+      - name: Build iOS app (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Upload iOS build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-products
+          path: build/ios
