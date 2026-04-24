@@ -12,13 +12,61 @@ const NVIDIA_CHAT_COMPLETIONS_URL = 'https://integrate.api.nvidia.com/v1/chat/co
 const MODEL = 'stepfun-ai/step-3.5-flash';
 
 export async function onRequestPost(context) {
-  const { request, env } = context;
+  return handleChatRequest(context.request, context.env);
+}
 
+export async function onRequestOptions() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders(),
+  });
+}
+
+// Also support classic module Workers entrypoint (`export default { fetch() { ... } }`),
+// so this file works in either Cloudflare Pages Functions or Cloudflare Workers.
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(),
+      });
+    }
+
+    if (url.pathname !== '/chat') {
+      return withCors(
+        json(
+          {
+            error: 'Not found',
+          },
+          404,
+        ),
+      );
+    }
+
+    if (request.method !== 'POST') {
+      return withCors(
+        json(
+          {
+            error: 'Method not allowed',
+          },
+          405,
+        ),
+      );
+    }
+
+    return handleChatRequest(request, env);
+  },
+};
+
+async function handleChatRequest(request, env) {
   let payload;
   try {
     payload = await request.json();
   } catch {
-    return json({ error: 'Invalid JSON' }, 400);
+    return withCors(json({ error: 'Invalid JSON' }, 400));
   }
 
   const message = String(payload?.message ?? '').trim();
@@ -26,12 +74,12 @@ export async function onRequestPost(context) {
   const chatHistory = Array.isArray(payload?.chatHistory) ? payload.chatHistory : [];
 
   if (!message) {
-    return json({ error: 'Message is required' }, 400);
+    return withCors(json({ error: 'Message is required' }, 400));
   }
 
   const apiKey = String(env?.NVIDIA_API_KEY ?? env?.NIM_API_KEY ?? '').trim();
   if (!apiKey) {
-    return json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500);
+    return withCors(json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500));
   }
 
   const messages = [];
@@ -73,29 +121,31 @@ export async function onRequestPost(context) {
       }),
     });
   } catch {
-    return json({ error: 'Upstream provider unreachable' }, 502);
+    return withCors(json({ error: 'Upstream provider unreachable' }, 502));
   }
 
   if (upstreamResponse.status === 429) {
-    return json({ error: 'Rate limit' }, 429);
+    return withCors(json({ error: 'Rate limit' }, 429));
   }
 
   if (!upstreamResponse.ok) {
     const details = await safeJson(upstreamResponse);
-    return json({ error: 'Upstream provider error', details }, 502);
+    return withCors(json({ error: 'Upstream provider error', details }, 502));
   }
 
   const data = await safeJson(upstreamResponse);
   const content = extractTextContent(data);
 
   if (!content) {
-    return json({ error: 'Empty response from upstream provider' }, 502);
+    return withCors(json({ error: 'Empty response from upstream provider' }, 502));
   }
 
-  return json({
-    type: 'message',
-    content,
-  });
+  return withCors(
+    json({
+      type: 'message',
+      content,
+    }),
+  );
 }
 
 function extractTextContent(data) {
@@ -117,8 +167,13 @@ function extractTextContent(data) {
 }
 
 async function safeJson(response) {
+  const contentType = response.headers.get('content-type') ?? '';
   try {
-    return await response.json();
+    if (contentType.includes('application/json')) {
+      return await response.json();
+    }
+    const text = await response.text();
+    return text ? { raw: text } : null;
   } catch {
     return null;
   }
@@ -132,4 +187,25 @@ function json(body, status = 200) {
       'cache-control': 'no-store',
     },
   });
+}
+
+function withCors(response) {
+  const headers = new Headers(response.headers);
+  const cors = corsHeaders();
+  for (const [key, value] of Object.entries(cors)) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function corsHeaders() {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-headers': 'Content-Type, Authorization',
+  };
 }
