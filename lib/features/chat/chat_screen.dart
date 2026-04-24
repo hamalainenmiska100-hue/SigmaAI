@@ -12,9 +12,7 @@ import 'models/chat_message.dart';
 import 'models/chat_thread.dart';
 import 'services/ai_service.dart';
 import 'services/chat_history_store.dart';
-import 'services/image_attachment_service.dart';
 import 'widgets/chat_bubble.dart';
-import 'widgets/chat_loading_area.dart';
 import 'widgets/message_input.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -30,13 +28,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final _chatStore = ChatHistoryStore(LocalStorageService());
   final _settingsService = SettingsService(LocalStorageService());
   final _aiService = AiService();
-  final _imageService = ImageAttachmentService();
 
   List<ChatMessage> _messages = [];
   List<ChatThread> _threads = [];
   ChatThread? _activeThread;
   bool _isGenerating = false;
-  String? _pendingImageData;
 
   @override
   void initState() {
@@ -65,14 +61,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendMessage(String text) async {
     final trimmed = text.trim();
-    if ((trimmed.isEmpty && _pendingImageData == null) || _isGenerating) return;
+    if (trimmed.isEmpty || _isGenerating) return;
     if (trimmed.length > AppConfig.maxMessageLength) return;
 
     final userMessage = ChatMessage(
       id: _uuid.v4(),
       role: 'user',
       content: trimmed,
-      imageData: _pendingImageData,
       createdAt: DateTime.now(),
     );
 
@@ -87,7 +82,6 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _messages = [..._messages, userMessage, placeholder];
       _isGenerating = true;
-      _pendingImageData = null;
     });
     await _persistCurrentThread(_messages, titleHint: trimmed);
     _scrollToBottom();
@@ -100,7 +94,6 @@ class _ChatScreenState extends State<ChatScreen> {
         message: trimmed,
         customInstructions: customInstructions,
         history: _messages,
-        imageData: userMessage.imageData,
       )) {
         streamed += delta;
         if (!mounted) return;
@@ -118,13 +111,19 @@ class _ChatScreenState extends State<ChatScreen> {
     } on AiException catch (e) {
       debugPrint('AiException: ${e.displayMessage}');
       if (!mounted) return;
-      setState(() => _isGenerating = false);
+      setState(() {
+        _isGenerating = false;
+        _messages = _messages.where((m) => m.id != assistantId || m.content.trim().isNotEmpty).toList();
+      });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.displayMessage)));
     } catch (e, stackTrace) {
       debugPrint('Unhandled error while sending message: $e');
       debugPrint('$stackTrace');
       if (!mounted) return;
-      setState(() => _isGenerating = false);
+      setState(() {
+        _isGenerating = false;
+        _messages = _messages.where((m) => m.id != assistantId || m.content.trim().isNotEmpty).toList();
+      });
     }
   }
 
@@ -166,12 +165,6 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     Navigator.of(context).maybePop();
     _scrollToBottom(jump: true);
-  }
-
-  Future<void> _pickImage() async {
-    final data = await _imageService.pickCompressedImageDataUri();
-    if (data == null || !mounted) return;
-    setState(() => _pendingImageData = data);
   }
 
   void _scrollToBottom({bool jump = false}) {
@@ -220,39 +213,30 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ),
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(colors: [Color(0xFF090B14), Color(0xFF111A2A)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        ),
-        child: Column(
-          children: [
-            Expanded(
-              child: _messages.isEmpty
-                  ? const EmptyState(text: 'Ask anything, or upload a photo.')
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.only(top: 8, bottom: 8),
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final message = _messages[index];
-                        return ChatBubble(
-                          content: message.content,
-                          isUser: message.isUser,
-                          imageData: message.imageData,
-                        );
-                      },
-                    ),
-            ),
-            ChatLoadingArea(isLoading: _isGenerating),
-            MessageInput(
-              enabled: !_isGenerating,
-              hasPendingImage: _pendingImageData != null,
-              onPickImage: _pickImage,
-              onRemoveImage: () => setState(() => _pendingImageData = null),
-              onSend: _sendMessage,
-            ),
-          ],
-        ),
+      body: Column(
+        children: [
+          Expanded(
+            child: _messages.isEmpty
+                ? const EmptyState(text: 'Ask anything.')
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.only(top: 8, bottom: 8),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final message = _messages[index];
+                      return ChatBubble(
+                        content: message.content,
+                        isUser: message.isUser,
+                      );
+                    },
+                  ),
+          ),
+          MessageInput(
+            enabled: !_isGenerating,
+            onSend: _sendMessage,
+            isGenerating: _isGenerating,
+          ),
+        ],
       ),
     );
   }
