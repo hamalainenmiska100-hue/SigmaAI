@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
@@ -134,16 +135,19 @@ class _ChatScreenState extends State<ChatScreen> {
       });
       _scrollToBottom();
     } on AiException catch (e) {
+      debugPrint('AiException: ${e.displayMessage}');
       if (!mounted) return;
       setState(() => _isGenerating = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.userMessage)),
+        SnackBar(content: Text(e.displayMessage)),
       );
-    } catch (_) {
+    } catch (e, stackTrace) {
+      debugPrint('Unhandled error while sending message: $e');
+      debugPrint('$stackTrace');
       if (!mounted) return;
       setState(() => _isGenerating = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Something went wrong. Please try again.')),
+        SnackBar(content: Text('Something went wrong. Please try again.\n$e')),
       );
     }
   }

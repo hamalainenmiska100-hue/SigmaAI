@@ -46,10 +46,16 @@ class AiService {
           .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 429) {
-        throw AiException.rateLimit();
+        throw AiException.rateLimit(
+          debugDetails:
+              'POST ${AppConfig.proxyChatUri} returned 429. Body: ${_bodyPreview(response.body)}',
+        );
       }
       if (response.statusCode != 200) {
-        throw AiException.server();
+        throw AiException.server(
+          debugDetails:
+              'POST ${AppConfig.proxyChatUri} returned ${response.statusCode}. Body: ${_bodyPreview(response.body)}',
+        );
       }
 
       final decoded = jsonDecode(response.body);
@@ -95,28 +101,62 @@ class AiService {
       }
 
       throw AiException.badResponse();
-    } on TimeoutException {
-      throw AiException.network();
-    } on FormatException {
-      throw AiException.badResponse();
-    } on http.ClientException {
-      throw AiException.network();
+    } on TimeoutException catch (e) {
+      throw AiException.network(
+        debugDetails: 'Timeout while calling ${AppConfig.proxyChatUri}: ${e.message ?? 'no message'}',
+      );
+    } on FormatException catch (e) {
+      throw AiException.badResponse(
+        debugDetails: 'Invalid JSON from ${AppConfig.proxyChatUri}: ${e.message}',
+      );
+    } on http.ClientException catch (e) {
+      throw AiException.network(
+        debugDetails: 'ClientException for ${AppConfig.proxyChatUri}: ${e.message}',
+      );
     }
+  }
+
+  static String _bodyPreview(String body) {
+    final normalized = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return '<empty>';
+    const max = 300;
+    if (normalized.length <= max) return normalized;
+    return '${normalized.substring(0, max)}...';
   }
 }
 
 class AiException implements Exception {
   final bool isRateLimit;
   final String userMessage;
+  final String? debugDetails;
 
-  AiException._({required this.isRateLimit, required this.userMessage});
+  AiException._({
+    required this.isRateLimit,
+    required this.userMessage,
+    this.debugDetails,
+  });
 
-  factory AiException.network() =>
-      AiException._(isRateLimit: false, userMessage: 'Network issue. Check your connection and try again.');
-  factory AiException.server() =>
-      AiException._(isRateLimit: false, userMessage: 'Server error. Please try again in a moment.');
-  factory AiException.badResponse() =>
-      AiException._(isRateLimit: false, userMessage: 'Unexpected server response. Please try again.');
-  factory AiException.rateLimit() =>
-      AiException._(isRateLimit: true, userMessage: 'Too many requests. Please try again later.');
+  String get displayMessage =>
+      debugDetails == null || debugDetails!.isEmpty ? userMessage : '$userMessage\n$debugDetails';
+
+  factory AiException.network({String? debugDetails}) => AiException._(
+        isRateLimit: false,
+        userMessage: 'Network issue. Check your connection and try again.',
+        debugDetails: debugDetails,
+      );
+  factory AiException.server({String? debugDetails}) => AiException._(
+        isRateLimit: false,
+        userMessage: 'Server error. Please try again in a moment.',
+        debugDetails: debugDetails,
+      );
+  factory AiException.badResponse({String? debugDetails}) => AiException._(
+        isRateLimit: false,
+        userMessage: 'Unexpected server response. Please try again.',
+        debugDetails: debugDetails,
+      );
+  factory AiException.rateLimit({String? debugDetails}) => AiException._(
+        isRateLimit: true,
+        userMessage: 'Too many requests. Please try again later.',
+        debugDetails: debugDetails,
+      );
 }
