@@ -137,11 +137,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() => _isGenerating = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.isRateLimit
-              ? 'Too many requests. Please try again later.'
-              : 'Something went wrong. Please try again.'),
-        ),
+        SnackBar(content: Text(e.userMessage)),
       );
     } catch (_) {
       if (!mounted) return;

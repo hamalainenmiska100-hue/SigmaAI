@@ -32,8 +32,11 @@ class AiService {
 
       final response = await _client
           .post(
-            Uri.parse(AppConfig.proxyChatUrl),
-            headers: const {'Content-Type': 'application/json'},
+            AppConfig.proxyChatUri,
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
             body: jsonEncode({
               'message': message,
               'customInstructions': customInstructions,
@@ -46,12 +49,12 @@ class AiService {
         throw AiException.rateLimit();
       }
       if (response.statusCode != 200) {
-        throw AiException.generic();
+        throw AiException.server();
       }
 
       final decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic>) {
-        throw AiException.generic();
+        throw AiException.badResponse();
       }
 
       final type = decoded['type'];
@@ -62,7 +65,7 @@ class AiService {
       if (type == 'artifact') {
         final artifactMap = decoded['artifact'];
         if (artifactMap is! Map<String, dynamic>) {
-          throw AiException.generic();
+          throw AiException.badResponse();
         }
 
         var filename = FileTypeUtils.sanitizeFilename((artifactMap['filename'] ?? 'artifact.txt').toString());
@@ -91,22 +94,29 @@ class AiService {
         );
       }
 
-      throw AiException.generic();
+      throw AiException.badResponse();
     } on TimeoutException {
-      throw AiException.generic();
+      throw AiException.network();
     } on FormatException {
-      throw AiException.generic();
+      throw AiException.badResponse();
     } on http.ClientException {
-      throw AiException.generic();
+      throw AiException.network();
     }
   }
 }
 
 class AiException implements Exception {
   final bool isRateLimit;
+  final String userMessage;
 
-  AiException._(this.isRateLimit);
+  AiException._({required this.isRateLimit, required this.userMessage});
 
-  factory AiException.generic() => AiException._(false);
-  factory AiException.rateLimit() => AiException._(true);
+  factory AiException.network() =>
+      AiException._(isRateLimit: false, userMessage: 'Network issue. Check your connection and try again.');
+  factory AiException.server() =>
+      AiException._(isRateLimit: false, userMessage: 'Server error. Please try again in a moment.');
+  factory AiException.badResponse() =>
+      AiException._(isRateLimit: false, userMessage: 'Unexpected server response. Please try again.');
+  factory AiException.rateLimit() =>
+      AiException._(isRateLimit: true, userMessage: 'Too many requests. Please try again later.');
 }

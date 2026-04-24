@@ -16,9 +16,11 @@ Proxy URL is configured in:
 
 `lib/core/config/app_config.dart`
 
-Current URL:
+Base URL:
 
-`https://chat.vymedia.xyz/chat`
+`https://chat.vymedia.xyz`
+
+The app targets `/chat` automatically when the base URL has no explicit path.
 
 The Flutter app does not store or include any provider API keys.
 
