@@ -3,14 +3,14 @@ class ChatMessage {
   final String role;
   final String content;
   final DateTime createdAt;
-  final String? artifactId;
+  final String? imageData;
 
   const ChatMessage({
     required this.id,
     required this.role,
     required this.content,
     required this.createdAt,
-    this.artifactId,
+    this.imageData,
   });
 
   bool get isUser => role == 'user';
@@ -22,7 +22,7 @@ class ChatMessage {
       'role': role,
       'content': content,
       'createdAt': createdAt.toIso8601String(),
-      'artifactId': artifactId,
+      'imageData': imageData,
     };
   }
 
@@ -30,9 +30,9 @@ class ChatMessage {
     return ChatMessage(
       id: json['id'] as String,
       role: json['role'] as String,
-      content: json['content'] as String,
+      content: (json['content'] ?? '').toString(),
       createdAt: DateTime.parse(json['createdAt'] as String),
-      artifactId: json['artifactId'] as String?,
+      imageData: json['imageData'] as String?,
     );
   }
 }

@@ -1,73 +1,77 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 class ChatBubble extends StatelessWidget {
   final String content;
   final bool isUser;
+  final String? imageData;
 
   const ChatBubble({
     super.key,
     required this.content,
     required this.isUser,
+    this.imageData,
   });
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
-    return Align(
+    return AnimatedAlign(
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 720),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        constraints: const BoxConstraints(maxWidth: 740),
         margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: isUser ? colors.primaryContainer : colors.surfaceContainerHighest.withOpacity(0.65),
-          borderRadius: BorderRadius.circular(22),
+          color: isUser ? colors.primaryContainer : colors.surfaceContainerHighest.withValues(alpha: 0.65),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.16)),
         ),
-        child: isUser
-            ? SelectableText(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (imageData != null) ...[
+              _InlineImage(dataUri: imageData!),
+              if (content.trim().isNotEmpty) const SizedBox(height: 10),
+            ],
+            if (isUser)
+              SelectableText(
                 content,
                 style: TextStyle(
                   color: colors.onPrimaryContainer,
                 ),
               )
-            : MarkdownBody(
+            else
+              MarkdownBody(
                 data: content,
                 selectable: true,
-                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                  p: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.45),
-                  tableCellsPadding: const EdgeInsets.all(10),
-                  codeblockDecoration: BoxDecoration(
-                    color: colors.surface.withOpacity(0.75),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  blockquoteDecoration: BoxDecoration(
-                    color: colors.surfaceContainerHigh.withOpacity(0.55),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border(
-                      left: BorderSide(
-                        color: colors.primary,
-                        width: 4,
-                      ),
-                    ),
-                  ),
-                ),
-                builders: {
-                  'table': _TableBuilder(),
-                },
               ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _TableBuilder extends MarkdownElementBuilder {
+class _InlineImage extends StatelessWidget {
+  final String dataUri;
+
+  const _InlineImage({required this.dataUri});
+
   @override
-  Widget? visitElementAfter(element, preferredStyle) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: super.visitElementAfter(element, preferredStyle),
+  Widget build(BuildContext context) {
+    final idx = dataUri.indexOf(',');
+    if (idx < 0) return const SizedBox.shrink();
+    final bytes = base64Decode(dataUri.substring(idx + 1));
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: Image.memory(bytes, fit: BoxFit.cover, height: 220),
     );
   }
 }

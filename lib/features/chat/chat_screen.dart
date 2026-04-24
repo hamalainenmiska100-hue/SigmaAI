@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
@@ -5,15 +7,12 @@ import 'package:uuid/uuid.dart';
 import '../../core/config/app_config.dart';
 import '../../core/storage/local_storage_service.dart';
 import '../../core/widgets/empty_state.dart';
-import '../artifacts/artifact_viewer_screen.dart';
-import '../artifacts/models/artifact.dart';
-import '../artifacts/services/artifact_file_service.dart';
-import '../artifacts/services/artifact_local_store.dart';
 import '../settings/services/settings_service.dart';
 import 'models/chat_message.dart';
+import 'models/chat_thread.dart';
 import 'services/ai_service.dart';
-import 'services/chat_local_store.dart';
-import 'widgets/chat_artifact_card.dart';
+import 'services/chat_history_store.dart';
+import 'services/image_attachment_service.dart';
 import 'widgets/chat_bubble.dart';
 import 'widgets/chat_loading_area.dart';
 import 'widgets/message_input.dart';
@@ -28,15 +27,16 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   final _uuid = const Uuid();
-  final _chatStore = ChatLocalStore(LocalStorageService());
+  final _chatStore = ChatHistoryStore(LocalStorageService());
   final _settingsService = SettingsService(LocalStorageService());
   final _aiService = AiService();
-  final _artifactStore = ArtifactLocalStore(LocalStorageService());
-  final _artifactFileService = ArtifactFileService();
+  final _imageService = ImageAttachmentService();
 
   List<ChatMessage> _messages = [];
-  List<Artifact> _artifacts = [];
+  List<ChatThread> _threads = [];
+  ChatThread? _activeThread;
   bool _isGenerating = false;
+  String? _pendingImageData;
 
   @override
   void initState() {
@@ -45,111 +45,133 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _loadInitialData() async {
-    final loadedMessages = await _chatStore.loadMessages();
-    final loadedArtifacts = await _artifactStore.loadArtifacts();
+    final loadedThreads = await _chatStore.loadThreads();
+    ChatThread active;
+    if (loadedThreads.isEmpty) {
+      active = ChatThread(id: _uuid.v4(), title: 'New chat', updatedAt: DateTime.now());
+      await _chatStore.saveThreads([active]);
+    } else {
+      active = loadedThreads.first;
+    }
+    final loadedMessages = await _chatStore.loadMessages(active.id);
     if (!mounted) return;
     setState(() {
+      _threads = loadedThreads.isEmpty ? [active] : loadedThreads;
+      _activeThread = active;
       _messages = loadedMessages;
-      _artifacts = loadedArtifacts;
     });
     _scrollToBottom(jump: true);
   }
 
   Future<void> _sendMessage(String text) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || _isGenerating) return;
-    if (trimmed.length > AppConfig.maxMessageLength) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Something went wrong. Please try again.')),
-      );
-      return;
-    }
+    if ((trimmed.isEmpty && _pendingImageData == null) || _isGenerating) return;
+    if (trimmed.length > AppConfig.maxMessageLength) return;
 
     final userMessage = ChatMessage(
       id: _uuid.v4(),
       role: 'user',
       content: trimmed,
+      imageData: _pendingImageData,
+      createdAt: DateTime.now(),
+    );
+
+    final assistantId = _uuid.v4();
+    final placeholder = ChatMessage(
+      id: assistantId,
+      role: 'assistant',
+      content: '',
       createdAt: DateTime.now(),
     );
 
     setState(() {
-      _messages = [..._messages, userMessage];
+      _messages = [..._messages, userMessage, placeholder];
       _isGenerating = true;
+      _pendingImageData = null;
     });
-    await _chatStore.saveMessages(_messages);
+    await _persistCurrentThread(_messages, titleHint: trimmed);
     _scrollToBottom();
 
     final customInstructions = await _settingsService.loadCustomInstructions();
 
     try {
-      final response = await _aiService.sendMessage(
+      var streamed = '';
+      await for (final delta in _aiService.streamMessage(
         message: trimmed,
         customInstructions: customInstructions,
         history: _messages,
-      );
-
-      Artifact? createdArtifact;
-      ChatMessage? assistantMessage;
-
-      if (response.type == 'message') {
-        assistantMessage = ChatMessage(
-          id: _uuid.v4(),
-          role: 'assistant',
-          content: response.content ?? '',
-          createdAt: DateTime.now(),
-        );
-      } else if (response.type == 'artifact' && response.artifact != null) {
-        createdArtifact = Artifact(
-          id: _uuid.v4(),
-          filename: response.artifact!.filename,
-          fileType: response.artifact!.fileType,
-          language: response.artifact!.language,
-          content: response.artifact!.content,
-          status: response.artifact!.status,
-          createdAt: DateTime.now(),
-        );
-
-        assistantMessage = ChatMessage(
-          id: _uuid.v4(),
-          role: 'assistant',
-          content: (response.message?.trim().isNotEmpty ?? false)
-              ? response.message!.trim()
-              : 'Artifact ready',
-          createdAt: DateTime.now(),
-          artifactId: createdArtifact.id,
-        );
+        imageData: userMessage.imageData,
+      )) {
+        streamed += delta;
+        if (!mounted) return;
+        setState(() {
+          _messages = _messages
+              .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
+              .toList();
+        });
+        _scrollToBottom();
       }
 
-      if (assistantMessage != null) {
-        _messages = [..._messages, assistantMessage];
-      }
-      if (createdArtifact != null) {
-        _artifacts = [..._artifacts, createdArtifact];
-        await _artifactStore.saveArtifacts(_artifacts);
-      }
-
-      await _chatStore.saveMessages(_messages);
+      await _persistCurrentThread(_messages);
       if (!mounted) return;
-      setState(() {
-        _isGenerating = false;
-      });
-      _scrollToBottom();
+      setState(() => _isGenerating = false);
     } on AiException catch (e) {
       debugPrint('AiException: ${e.displayMessage}');
       if (!mounted) return;
       setState(() => _isGenerating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.displayMessage)),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.displayMessage)));
     } catch (e, stackTrace) {
       debugPrint('Unhandled error while sending message: $e');
       debugPrint('$stackTrace');
       if (!mounted) return;
       setState(() => _isGenerating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Something went wrong. Please try again.\n$e')),
-      );
     }
+  }
+
+  Future<void> _persistCurrentThread(List<ChatMessage> messages, {String? titleHint}) async {
+    if (_activeThread == null) return;
+    await _chatStore.saveMessages(_activeThread!.id, messages);
+    final title = (titleHint?.trim().isNotEmpty ?? false)
+        ? (() {
+            final firstLine = titleHint!.trim().split('\n').first;
+            final maxLen = firstLine.length > 28 ? 28 : firstLine.length;
+            return firstLine.substring(0, maxLen);
+          })()
+        : _activeThread!.title;
+    final updated = ChatThread(id: _activeThread!.id, title: title, updatedAt: DateTime.now());
+    final nextThreads = _threads.where((t) => t.id != updated.id).toList();
+    nextThreads.insert(0, updated);
+    _threads = nextThreads;
+    _activeThread = updated;
+    await _chatStore.saveThreads(_threads);
+  }
+
+  Future<void> _createThread() async {
+    final thread = ChatThread(id: _uuid.v4(), title: 'New chat', updatedAt: DateTime.now());
+    setState(() {
+      _activeThread = thread;
+      _threads = [thread, ..._threads];
+      _messages = [];
+    });
+    await _chatStore.saveThreads(_threads);
+    await _chatStore.saveMessages(thread.id, []);
+  }
+
+  Future<void> _switchThread(ChatThread thread) async {
+    final messages = await _chatStore.loadMessages(thread.id);
+    if (!mounted) return;
+    setState(() {
+      _activeThread = thread;
+      _messages = messages;
+    });
+    Navigator.of(context).maybePop();
+    _scrollToBottom(jump: true);
+  }
+
+  Future<void> _pickImage() async {
+    final data = await _imageService.pickCompressedImageDataUri();
+    if (data == null || !mounted) return;
+    setState(() => _pendingImageData = data);
   }
 
   void _scrollToBottom({bool jump = false}) {
@@ -160,38 +182,11 @@ class _ChatScreenState extends State<ChatScreen> {
       } else {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 260),
-          curve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
         );
       }
     });
-  }
-
-  Artifact? _artifactForMessage(ChatMessage message) {
-    if (message.artifactId == null) return null;
-    for (final a in _artifacts) {
-      if (a.id == message.artifactId) return a;
-    }
-    return null;
-  }
-
-  Future<void> _clearChat() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear chat?'),
-        content: const Text('This will remove the current chat history from this device.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      setState(() => _messages = []);
-      await _chatStore.clear();
-    }
   }
 
   @override
@@ -204,67 +199,60 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SigmaAI'),
+        title: const Text('Sigma'),
         actions: [
-          if (_messages.isNotEmpty)
-            IconButton(
-              onPressed: _isGenerating ? null : _clearChat,
-              icon: const Icon(Icons.delete_outline),
-            ),
+          IconButton(onPressed: _createThread, icon: const Icon(Icons.add_comment_outlined)),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _messages.isEmpty
-                ? const EmptyState(text: 'Ask anything.')
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.only(top: 8, bottom: 8),
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final message = _messages[index];
-                      final artifact = _artifactForMessage(message);
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          ChatBubble(content: message.content, isUser: message.isUser),
-                          if (artifact != null)
-                            ChatArtifactCard(
-                              artifact: artifact,
-                              onOpen: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => ArtifactViewerScreen(artifact: artifact),
-                                  ),
-                                );
-                              },
-                              onCopy: () async {
-                                await _artifactFileService.copy(artifact);
-                                if (!mounted) return;
-                                ScaffoldMessenger.of(context)
-                                    .showSnackBar(const SnackBar(content: Text('Copied')));
-                              },
-                              onShare: () async {
-                                try {
-                                  await _artifactFileService.share(artifact);
-                                } catch (_) {
-                                  if (!mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Could not share artifact')),
-                                  );
-                                }
-                              },
-                            ),
-                        ],
-                      );
-                    },
-                  ),
+      drawer: Drawer(
+        child: SafeArea(
+          child: ListView(
+            children: [
+              const ListTile(title: Text('Chat History')),
+              for (final thread in _threads)
+                ListTile(
+                  leading: const Icon(Icons.chat_outlined),
+                  title: Text(thread.title),
+                  selected: thread.id == _activeThread?.id,
+                  onTap: () => _switchThread(thread),
+                ),
+            ],
           ),
-          ChatLoadingArea(isLoading: _isGenerating),
-          MessageInput(enabled: !_isGenerating, onSend: _sendMessage),
-        ],
+        ),
+      ),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(colors: [Color(0xFF090B14), Color(0xFF111A2A)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+        ),
+        child: Column(
+          children: [
+            Expanded(
+              child: _messages.isEmpty
+                  ? const EmptyState(text: 'Ask anything, or upload a photo.')
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final message = _messages[index];
+                        return ChatBubble(
+                          content: message.content,
+                          isUser: message.isUser,
+                          imageData: message.imageData,
+                        );
+                      },
+                    ),
+            ),
+            ChatLoadingArea(isLoading: _isGenerating),
+            MessageInput(
+              enabled: !_isGenerating,
+              hasPendingImage: _pendingImageData != null,
+              onPickImage: _pickImage,
+              onRemoveImage: () => setState(() => _pendingImageData = null),
+              onSend: _sendMessage,
+            ),
+          ],
+        ),
       ),
     );
   }

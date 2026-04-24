@@ -1,6 +1,6 @@
-# SigmaAI
+# Sigma
 
-SigmaAI is a simple Flutter chat app with three tabs: Chat, Artifacts, and Settings.
+Sigma is a Flutter chat app with realtime streaming responses, photo prompts, local chat history, and a customizable UI.
 It sends chat requests to a single proxy URL and stores chat data locally on-device.
 
 ## Run
@@ -28,28 +28,14 @@ The Flutter app does not store or include any provider API keys.
 
 This MVP stores data locally with `shared_preferences`:
 
-- Chat history key: `sigmaai_chat_messages`
-- Artifacts key: `sigmaai_artifacts`
+- Chat threads key: `sigma_chat_threads`
+- Per-thread messages key: `sigma_chat_messages_<threadId>`
 - Custom instructions key: `sigmaai_custom_instructions`
 
-## Supported text artifacts
+## Notes
 
-- `.md`
-- `.txt`
-- `.json`
-- `.html`
-- `.css`
-- `.js`
-- `.ts`
-- `.py`
-- `.csv`
-
-## Not supported
-
-- Image generation
-- Video generation
-- Audio generation
-- Binary and media artifact files
+- Chat supports text streaming + image inputs via a Cloudflare Worker proxy.
+- Image attachments are compressed locally before storage and upload.
 
 ## iOS build
 
