@@ -7,6 +7,8 @@ on:
 
 env:
   CF_TOKEN: ${{ secrets.CF_TOKEN }}
+  CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
 
 concurrency:
   group: "cloudflare-pages"
@@ -18,6 +20,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate Cloudflare configuration
+        run: |
+          test -n "$CF_TOKEN" || (echo "Missing secret: CF_TOKEN" && exit 1)
+          test -n "$CF_ACCOUNT_ID" || (echo "Missing secret: CF_ACCOUNT_ID" && exit 1)
+          test -n "$CF_PAGES_PROJECT" || (echo "Missing variable: CF_PAGES_PROJECT" && exit 1)
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -34,7 +42,7 @@ jobs:
         uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ env.CF_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          projectName: ${{ vars.CF_PAGES_PROJECT }}
+          accountId: ${{ env.CF_ACCOUNT_ID }}
+          projectName: ${{ env.CF_PAGES_PROJECT }}
           directory: build/web
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
