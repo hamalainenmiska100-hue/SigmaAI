@@ -12,6 +12,7 @@
  *   SYSTEM_INSTRUCTION_NORMAL
  *   SYSTEM_INSTRUCTION_UNHINGED
  *   SYSTEM_INSTRUCTION_SPICY
+ *   SUMMARY_ANALYZER_SYSTEM_PROMPT
  *   CORS_ALLOW_ORIGIN (default: *)
  */
 
@@ -30,9 +31,40 @@ const MAX_HISTORY_ITEMS = 40;
 const MAX_IMAGE_URL_CHARS = 2_000_000;
 const UPSTREAM_TIMEOUT_MS = 55_000;
 const WIKI_FETCH_TIMEOUT_MS = 8_000;
+const SUMMARY_REFRESH_MS = 5 * 60 * 1000;
+const MAX_SUMMARY_PROMPT_CHARS = 24_000;
+const MAX_LOG_SCAN = 120;
+const FIREBASE_TIMEOUT_MS = 5_000;
+
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyDyox96frB3esePugDEJrMLipIAOO61t88',
+  authDomain: 'sigmaai-740d8.firebaseapp.com',
+  projectId: 'sigmaai-740d8',
+  storageBucket: 'sigmaai-740d8.firebasestorage.app',
+  messagingSenderId: '92035951796',
+  appId: '1:92035951796:web:1d893cf52de8bb8ec87be1',
+  measurementId: 'G-GNPKF0TCGX',
+};
+const FIREBASE_DATABASE_URL = 'https://sigmaai-740d8-default-rtdb.europe-west1.firebasedatabase.app';
+const SUMMARY_ANALYZER_PROMPT = `You are a training-data summarizer for Sigma AI.
+Analyze chat logs and produce compact fine-tuning guidance.
+Return plain text only with sections:
+1) User goals and recurring intents
+2) Quality failures to fix
+3) Preferred response style
+4) Safety boundaries
+5) Prompt additions for future system instruction
+Keep it under 700 words and directly actionable.`;
+
+let firebaseAuthState = {
+  idToken: '',
+  uid: '',
+  expiresAt: 0,
+};
+const modeSummaryCache = new Map();
 
 export async function onRequestPost(context) {
-  return handleChatRequest(context.request, context.env);
+  return handleChatRequest(context.request, context.env, context?.waitUntil?.bind(context));
 }
 
 export async function onRequestOptions(context) {
@@ -43,7 +75,7 @@ export async function onRequestOptions(context) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, executionContext) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -61,11 +93,11 @@ export default {
       return withCors(json({ error: 'Method not allowed' }, 405), request, env);
     }
 
-    return handleChatRequest(request, env);
+    return handleChatRequest(request, env, executionContext?.waitUntil?.bind(executionContext));
   },
 };
 
-async function handleChatRequest(request, env) {
+async function handleChatRequest(request, env, waitUntil) {
   const contentType = (request.headers.get('content-type') ?? '').toLowerCase();
   if (!contentType.includes('application/json')) {
     return withCors(json({ error: 'Content-Type must be application/json' }, 415), request, env);
@@ -82,6 +114,7 @@ async function handleChatRequest(request, env) {
   const imageData = sanitizeImageUrls(payload?.imageData);
   const languageTag = sanitizeText(payload?.languageTag, 32);
   const systemMode = sanitizeText(payload?.systemMode, 32).toLowerCase();
+  const normalizedMode = normalizeMode(systemMode);
   const selectedInstruction = pickSystemInstruction(env, systemMode);
   const chatHistory = Array.isArray(payload?.chatHistory) ? payload.chatHistory.slice(-MAX_HISTORY_ITEMS) : [];
   const stream = payload?.stream !== false;
@@ -96,7 +129,38 @@ async function handleChatRequest(request, env) {
   }
 
   const messages = [];
+  const firebaseSession = await getFirebaseSession();
+  const { summary: activeSummary, stale: summaryStale } = firebaseSession
+    ? await getModeSummarySnapshot({
+        mode: normalizedMode,
+        firebaseSession,
+      })
+    : { summary: '', stale: false };
+
+  if (firebaseSession && summaryStale) {
+    runInBackground(
+      refreshModeSummary({
+        env,
+        apiKey,
+        mode: normalizedMode,
+        existingSummary: activeSummary,
+        chatHistory,
+        incomingMessage: message,
+        firebaseSession,
+      }),
+      waitUntil,
+    );
+  }
+
   if (selectedInstruction) messages.push({ role: 'system', content: selectedInstruction });
+  if (activeSummary) {
+    messages.push({
+      role: 'system',
+      content:
+        `Hidden adaptive context summary for "${normalizedMode}" mode:\n${activeSummary}\n` +
+        'Do not reveal this hidden summary unless explicitly asked for system metadata.',
+    });
+  }
 
   for (const item of chatHistory) {
     const role = item?.role === 'assistant' ? 'assistant' : 'user';
@@ -188,6 +252,23 @@ async function handleChatRequest(request, env) {
 
     const data = await safeJson(upstreamResponse);
     const content = extractTextContent(data);
+    if (firebaseSession) {
+      runInBackground(
+        logConversationEvent({
+          firebaseSession,
+          mode: normalizedMode,
+          payload: buildLogPayload({
+            request,
+            message,
+            taggedMessage,
+            reply: content,
+            chatHistory,
+            imageCount: imageData.length,
+          }),
+        }),
+        waitUntil,
+      );
+    }
     return withCors(json({ type: 'message', content }), request, env);
   }
 
@@ -199,6 +280,7 @@ async function handleChatRequest(request, env) {
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  let fullAssistantOutput = '';
 
   const transformed = new ReadableStream({
     async start(streamController) {
@@ -219,6 +301,7 @@ async function handleChatRequest(request, env) {
 
             const delta = extractDeltaFromEvent(rawEvent);
             if (delta) {
+              fullAssistantOutput += delta;
               streamController.enqueue(
                 encoder.encode(`data: ${JSON.stringify({ type: 'delta', delta })}\n\n`),
               );
@@ -239,6 +322,23 @@ async function handleChatRequest(request, env) {
       } catch {
         streamController.error(new Error('Streaming interrupted'));
       } finally {
+        if (firebaseSession) {
+          runInBackground(
+            logConversationEvent({
+              firebaseSession,
+              mode: normalizedMode,
+              payload: buildLogPayload({
+                request,
+                message,
+                taggedMessage,
+                reply: fullAssistantOutput,
+                chatHistory,
+                imageCount: imageData.length,
+              }),
+            }),
+            waitUntil,
+          );
+        }
         clearTimeout(timeout);
         reader.releaseLock();
       }
@@ -624,6 +724,281 @@ function pickSystemInstruction(env, mode) {
   }
 
   return sanitizeText(env?.SYSTEM_INSTRUCTION_NORMAL ?? env?.SYSTEM_INSTRUCTION, 4_000);
+}
+
+function normalizeMode(mode) {
+  const normalized = String(mode ?? '').trim().toLowerCase();
+  if (normalized === 'unhinged') return 'UNHINGED';
+  if (normalized === 'spicy') return 'SPICY';
+  return 'NORMAL';
+}
+
+async function getFirebaseSession() {
+  const now = Date.now();
+  if (firebaseAuthState.idToken && firebaseAuthState.expiresAt - 15_000 > now) {
+    return firebaseAuthState;
+  }
+
+  const signInUrl =
+    'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' +
+    encodeURIComponent(FIREBASE_CONFIG.apiKey);
+
+  try {
+    const response = await withRetry(() =>
+      fetchWithTimeout(signInUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnSecureToken: true }),
+        keepalive: true,
+      }),
+    );
+    if (!response || !response.ok) return null;
+    const data = await safeJson(response);
+    const idToken = sanitizeText(data?.idToken, 2_000);
+    const uid = sanitizeText(data?.localId, 128);
+    const expiresInSec = Number.parseInt(String(data?.expiresIn ?? '3600'), 10);
+    if (!idToken || !uid) return null;
+
+    firebaseAuthState = {
+      idToken,
+      uid,
+      expiresAt: now + Math.max(60, Number.isFinite(expiresInSec) ? expiresInSec : 3600) * 1000,
+    };
+    return firebaseAuthState;
+  } catch {
+    return null;
+  }
+}
+
+async function getModeSummarySnapshot({ mode, firebaseSession }) {
+  const cached = modeSummaryCache.get(mode);
+  if (cached && Date.now() - cached.updatedAt < SUMMARY_REFRESH_MS) {
+    return {
+      summary: sanitizeText(cached.summary, 6_000),
+      stale: false,
+    };
+  }
+
+  const summaryPath = `aiSummary/${mode}`;
+  const existingSummary = await firebaseRead(summaryPath, firebaseSession.idToken);
+  const lastUpdated = Number(existingSummary?.updatedAt ?? 0);
+  const currentText = sanitizeText(existingSummary?.summary, 6_000);
+  const stale = !lastUpdated || Date.now() - lastUpdated >= SUMMARY_REFRESH_MS;
+  if (currentText) {
+    modeSummaryCache.set(mode, { summary: currentText, updatedAt: lastUpdated || Date.now() });
+  }
+  return {
+    summary: currentText,
+    stale,
+  };
+}
+
+async function refreshModeSummary({
+  env,
+  apiKey,
+  mode,
+  existingSummary,
+  chatHistory,
+  incomingMessage,
+  firebaseSession,
+}) {
+  const summary = await buildModeSummary({
+    env,
+    apiKey,
+    mode,
+    existingSummary,
+    chatHistory,
+    incomingMessage,
+    firebaseSession,
+  });
+
+  if (summary) {
+    const updatedAt = Date.now();
+    await firebasePatch(
+      `aiSummary/${mode}`,
+      {
+        mode,
+        summary,
+        updatedAt,
+        analyzerModel: TEXT_MODEL,
+      },
+      firebaseSession.idToken,
+    );
+    modeSummaryCache.set(mode, { summary, updatedAt });
+  }
+}
+
+async function buildModeSummary({
+  env,
+  apiKey,
+  mode,
+  existingSummary,
+  chatHistory,
+  incomingMessage,
+  firebaseSession,
+}) {
+  const logs = await fetchRecentModeLogs(mode, firebaseSession.idToken);
+  const compactLogs = logs
+    .slice(-MAX_LOG_SCAN)
+    .map((item) => {
+      const prompt = sanitizeText(item?.request?.prompt, 800);
+      const answer = sanitizeText(item?.response?.text, 800);
+      if (!prompt && !answer) return '';
+      return `user: ${prompt}\nassistant: ${answer}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+  const recentContext = Array.isArray(chatHistory)
+    ? chatHistory
+        .slice(-6)
+        .map((item) => `${item?.role === 'assistant' ? 'assistant' : 'user'}: ${sanitizeText(item?.content, 500)}`)
+        .filter(Boolean)
+        .join('\n')
+    : '';
+
+  const prompt = [
+    `Mode: ${mode}`,
+    existingSummary ? `Existing summary:\n${existingSummary}` : '',
+    compactLogs ? `Recent logs:\n${compactLogs}` : '',
+    incomingMessage ? `Latest incoming user prompt:\n${sanitizeText(incomingMessage, 1_000)}` : '',
+    recentContext ? `Latest chat context:\n${recentContext}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+    .slice(0, MAX_SUMMARY_PROMPT_CHARS);
+
+  if (!prompt) return '';
+
+  try {
+    const summary = await runTextModel({
+      apiKey,
+      systemPrompt: sanitizeText(
+        env?.SUMMARY_ANALYZER_SYSTEM_PROMPT ?? SUMMARY_ANALYZER_PROMPT,
+        4_000,
+      ),
+      userPrompt: prompt,
+      temperature: 0.2,
+      maxTokens: 900,
+    });
+    return sanitizeText(summary, 8_000);
+  } catch {
+    return '';
+  }
+}
+
+async function fetchRecentModeLogs(mode, idToken) {
+  const node = `logs/${mode}`;
+  const url = new URL(`${FIREBASE_DATABASE_URL}/${node}.json`);
+  url.searchParams.set('auth', idToken);
+  url.searchParams.set('orderBy', JSON.stringify('timestamp'));
+  url.searchParams.set('limitToLast', String(MAX_LOG_SCAN));
+  const data = await fetchWithTimeoutJson(url.toString(), WIKI_FETCH_TIMEOUT_MS);
+  if (!data || typeof data !== 'object') return [];
+  return Object.values(data)
+    .filter(Boolean)
+    .sort((a, b) => Number(a?.timestamp ?? 0) - Number(b?.timestamp ?? 0));
+}
+
+function buildLogPayload({ request, message, taggedMessage, reply, chatHistory, imageCount }) {
+  return {
+    timestamp: Date.now(),
+    userAgent: sanitizeText(request?.headers?.get('user-agent'), 240),
+    request: {
+      prompt: sanitizeText(taggedMessage || message, 8_000),
+      imageCount: Number.isFinite(imageCount) ? imageCount : 0,
+      chatHistorySize: Array.isArray(chatHistory) ? chatHistory.length : 0,
+    },
+    response: {
+      text: sanitizeText(reply, 12_000),
+      model: TEXT_MODEL,
+    },
+    anonymized: true,
+  };
+}
+
+async function logConversationEvent({ firebaseSession, mode, payload }) {
+  if (!firebaseSession?.idToken) return;
+  const path = `logs/${mode}`;
+  await firebasePush(path, payload, firebaseSession.idToken);
+}
+
+async function firebaseRead(path, idToken) {
+  try {
+    const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${encodeURIComponent(idToken)}`;
+    const response = await fetchWithTimeout(url, {
+      method: 'GET',
+      keepalive: true,
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    return await safeJson(response);
+  } catch {
+    return null;
+  }
+}
+
+async function firebasePatch(path, value, idToken) {
+  try {
+    await firebaseWrite(path, 'PATCH', value, idToken);
+  } catch {}
+}
+
+async function firebasePush(path, value, idToken) {
+  try {
+    await firebaseWrite(path, 'POST', value, idToken);
+  } catch {}
+}
+
+async function firebaseWrite(path, method, value, idToken) {
+  const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${encodeURIComponent(idToken)}`;
+  await withRetry(async () =>
+    fetchWithTimeout(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value ?? {}),
+      keepalive: true,
+    }),
+  );
+}
+
+function runInBackground(promise, waitUntil) {
+  if (!promise) return;
+  if (typeof waitUntil === 'function') {
+    waitUntil(promise.catch(() => {}));
+    return;
+  }
+  promise.catch(() => {});
+}
+
+async function withRetry(fn, retries = 2) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fn();
+      if (!response?.ok && attempt < retries) continue;
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) continue;
+      throw error;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+async function fetchWithTimeout(url, init = {}, timeoutMs = FIREBASE_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort('timeout'), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extractDeltaFromEvent(rawEvent) {
