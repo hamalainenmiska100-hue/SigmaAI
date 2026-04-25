@@ -85,7 +85,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: _language,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
-                    helperText: 'Appends a hidden tag to your prompt for the AI.',
                   ),
                   items: AssistantLanguage.values
                       .map(
@@ -107,7 +106,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: _tone,
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
-                    helperText: 'Controls which server system instruction profile is used.',
                   ),
                   items: AssistantTone.values
                       .map(
