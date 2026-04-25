@@ -1,4 +1,4 @@
-name: Build Flutter iOS App
+name: Build Flutter iOS IPA
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-ios:
+  build-ios-ipa:
     runs-on: macos-latest
 
     steps:
@@ -25,11 +25,12 @@ jobs:
       - name: Generate iOS platform project
         run: flutter create --platforms=ios .
 
-      - name: Build iOS app (no codesign)
-        run: flutter build ios --release --no-codesign
+      - name: Build iOS IPA (no codesign)
+        run: flutter build ipa --release --no-codesign
 
-      - name: Upload iOS build artifacts
+      - name: Upload iOS IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-products
-          path: build/ios
+          name: ios-ipa
+          path: build/ios/ipa/*.ipa
+          if-no-files-found: error
