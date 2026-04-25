@@ -34,6 +34,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatThread? _activeThread;
   bool _isGenerating = false;
   StreamSubscription<String>? _activeStream;
+  Completer<void>? _generationCompleter;
 
   @override
   void initState() {
@@ -94,11 +95,13 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       var streamed = '';
       final done = Completer<void>();
+      _generationCompleter = done;
+      final requestHistory = _messages.where((m) => m.id != assistantId).toList();
 
       _activeStream = _aiService
           .streamMessage(
             message: trimmed,
-            history: _messages,
+            history: requestHistory,
             languageTag: languageTag,
             systemMode: systemMode,
           )
@@ -113,8 +116,16 @@ class _ChatScreenState extends State<ChatScreen> {
           });
           _scrollToBottom();
         },
-        onError: done.completeError,
-        onDone: () => done.complete(),
+        onError: (Object error, StackTrace stackTrace) {
+          if (!done.isCompleted) {
+            done.completeError(error, stackTrace);
+          }
+        },
+        onDone: () {
+          if (!done.isCompleted) {
+            done.complete();
+          }
+        },
         cancelOnError: true,
       );
 
@@ -142,6 +153,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } finally {
       await _activeStream?.cancel();
       _activeStream = null;
+      _generationCompleter = null;
     }
   }
 
@@ -149,6 +161,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!_isGenerating) return;
     await _activeStream?.cancel();
     _activeStream = null;
+    if (_generationCompleter != null && !_generationCompleter!.isCompleted) {
+      _generationCompleter!.complete();
+    }
     if (!mounted) return;
     setState(() {
       _isGenerating = false;
