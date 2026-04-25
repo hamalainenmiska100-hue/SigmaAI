@@ -102,20 +102,12 @@ async function handleChatRequest(request, env) {
     const itemImage = sanitizeImageUrl(item?.imageData);
     if (!content && !itemImage) continue;
 
-    if (itemImage && role === 'user') {
-      const imageSummary = await summarizeImageForNvidia({
-        imageUrl: itemImage,
-        geminiApiKey,
-        cache: imageSummaryCache,
-      });
-      const combinedText = [content, imageSummary ? `Image summary:\n${imageSummary}` : '']
-        .filter(Boolean)
-        .join('\n\n')
-        .trim();
-      messages.push({ role, content: combinedText || content || 'Image shared by user.' });
-    } else {
-      messages.push({ role, content });
+    if (itemImage && role === 'user' && !content) {
+      messages.push({ role, content: 'User shared an image earlier in this thread.' });
+      continue;
     }
+
+    messages.push({ role, content });
   }
 
   if (imageData) {
