@@ -16,7 +16,7 @@
  */
 
 const NVIDIA_CHAT_COMPLETIONS_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const TEXT_MODEL = 'mistralai/devstral-2-123b-instruct-2512';
+const TEXT_MODEL = 'mistralai/mistral-nemotron';
 const VISION_MODEL = 'meta/llama-3.2-11b-vision-instruct';
 const VISION_PROMPT = 'Describe what is in this image in detail so it can be used as context for a separate text-only assistant.';
 
