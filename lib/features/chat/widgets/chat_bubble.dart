@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -82,6 +85,15 @@ class _ImagePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final provider = _providerFor(imageUrl);
+    if (provider == null) {
+      return Container(
+        color: colors.surfaceContainerHighest,
+        padding: const EdgeInsets.all(12),
+        child: const Text('Unable to load image preview'),
+      );
+    }
+
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: () {
@@ -94,8 +106,8 @@ class _ImagePreview extends StatelessWidget {
                   minScale: 0.8,
                   maxScale: 4,
                   child: Center(
-                    child: Image.network(
-                      imageUrl,
+                    child: Image(
+                      image: provider,
                       fit: BoxFit.contain,
                     ),
                   ),
@@ -120,8 +132,8 @@ class _ImagePreview extends StatelessWidget {
             maxHeight: 280,
             maxWidth: 360,
           ),
-          child: Image.network(
-            imageUrl,
+          child: Image(
+            image: provider,
             fit: BoxFit.cover,
             errorBuilder: (_, __, ___) => Container(
               color: colors.surfaceContainerHighest,
@@ -132,6 +144,23 @@ class _ImagePreview extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  ImageProvider? _providerFor(String value) {
+    if (value.startsWith('data:image/')) {
+      final match = RegExp(r'^data:image\/[a-zA-Z0-9+.-]+;base64,(.+)$', dotAll: true).firstMatch(value);
+      if (match == null) return null;
+      try {
+        final bytes = base64Decode(match.group(1)!);
+        return MemoryImage(Uint8List.fromList(bytes));
+      } catch (_) {
+        return null;
+      }
+    }
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      return NetworkImage(value);
+    }
+    return null;
   }
 }
 
