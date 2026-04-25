@@ -34,6 +34,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatThread? _activeThread;
   bool _isGenerating = false;
   StreamSubscription<String>? _activeStream;
+  Completer<void>? _generationCompleter;
 
   @override
   void initState() {
@@ -60,9 +61,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom(jump: true);
   }
 
-  Future<void> _sendMessage(String text) async {
+  Future<void> _sendMessage(String text, {String? imageData}) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || _isGenerating) return;
+    final normalizedImageData = imageData?.trim();
+    if ((trimmed.isEmpty && (normalizedImageData == null || normalizedImageData.isEmpty)) || _isGenerating) return;
     if (trimmed.length > AppConfig.maxMessageLength) return;
 
     final userMessage = ChatMessage(
@@ -70,6 +72,7 @@ class _ChatScreenState extends State<ChatScreen> {
       role: 'user',
       content: trimmed,
       createdAt: DateTime.now(),
+      imageData: normalizedImageData,
     );
 
     final assistantId = _uuid.v4();
@@ -84,7 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages = [..._messages, userMessage, placeholder];
       _isGenerating = true;
     });
-    await _persistCurrentThread(_messages, titleHint: trimmed);
+    await _persistCurrentThread(_messages, titleHint: trimmed.isNotEmpty ? trimmed : 'Image message');
     _scrollToBottom();
 
     final settings = await _settingsService.loadSettings();
@@ -94,13 +97,16 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       var streamed = '';
       final done = Completer<void>();
+      _generationCompleter = done;
+      final requestHistory = _messages.where((m) => m.id != assistantId).toList();
 
       _activeStream = _aiService
           .streamMessage(
             message: trimmed,
-            history: _messages,
+            history: requestHistory,
             languageTag: languageTag,
             systemMode: systemMode,
+            imageData: normalizedImageData,
           )
           .listen(
         (delta) {
@@ -113,8 +119,16 @@ class _ChatScreenState extends State<ChatScreen> {
           });
           _scrollToBottom();
         },
-        onError: done.completeError,
-        onDone: () => done.complete(),
+        onError: (Object error, StackTrace stackTrace) {
+          if (!done.isCompleted) {
+            done.completeError(error, stackTrace);
+          }
+        },
+        onDone: () {
+          if (!done.isCompleted) {
+            done.complete();
+          }
+        },
         cancelOnError: true,
       );
 
@@ -142,13 +156,18 @@ class _ChatScreenState extends State<ChatScreen> {
     } finally {
       await _activeStream?.cancel();
       _activeStream = null;
+      _generationCompleter = null;
     }
   }
 
   Future<void> _stopGeneration() async {
     if (!_isGenerating) return;
+    _aiService.cancelActiveRequest();
     await _activeStream?.cancel();
     _activeStream = null;
+    if (_generationCompleter != null && !_generationCompleter!.isCompleted) {
+      _generationCompleter!.complete();
+    }
     if (!mounted) return;
     setState(() {
       _isGenerating = false;
@@ -225,6 +244,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _activeStream?.cancel();
+    _aiService.cancelActiveRequest();
     _scrollController.dispose();
     super.dispose();
   }
@@ -268,6 +288,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       return ChatBubble(
                         content: message.content,
                         isUser: message.isUser,
+                        imageData: message.imageData,
                       );
                     },
                   ),

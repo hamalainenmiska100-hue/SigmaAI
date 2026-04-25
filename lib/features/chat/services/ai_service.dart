@@ -7,9 +7,14 @@ import '../../../core/config/app_config.dart';
 import '../models/chat_message.dart';
 
 class AiService {
-  final http.Client _client;
+  http.Client _client;
 
   AiService({http.Client? client}) : _client = client ?? http.Client();
+
+  void cancelActiveRequest() {
+    _client.close();
+    _client = http.Client();
+  }
 
   Stream<String> streamMessage({
     required String message,
@@ -24,7 +29,6 @@ class AiService {
           (e) => {
             'role': e.role,
             'content': e.content,
-            if (e.imageData != null) 'imageData': e.imageData,
           },
         )
         .toList();

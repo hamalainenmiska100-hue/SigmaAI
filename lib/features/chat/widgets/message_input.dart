@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../services/image_attachment_service.dart';
+
 class MessageInput extends StatefulWidget {
   final bool canSend;
   final bool isGenerating;
-  final Future<void> Function(String text) onSend;
+  final Future<void> Function(String text, {String? imageData}) onSend;
   final VoidCallback onStop;
 
   const MessageInput({
@@ -20,16 +22,28 @@ class MessageInput extends StatefulWidget {
 
 class _MessageInputState extends State<MessageInput> {
   final controller = TextEditingController();
+  final _imageAttachmentService = ImageAttachmentService();
+  String? _attachedImageData;
 
   Future<void> submit() async {
     final text = controller.text.trim();
+    final imageData = _attachedImageData?.trim();
 
-    if (text.isEmpty || !widget.canSend) {
+    if ((text.isEmpty && (imageData == null || imageData.isEmpty)) || !widget.canSend) {
       return;
     }
 
     controller.clear();
-    await widget.onSend(text);
+    setState(() => _attachedImageData = null);
+    await widget.onSend(text, imageData: imageData);
+  }
+
+  Future<void> _pickImageFromDevice() async {
+    final picked = await _imageAttachmentService.pickCompressedImageDataUri();
+    if (!mounted || picked == null) return;
+    setState(() {
+      _attachedImageData = picked;
+    });
   }
 
   @override
@@ -75,6 +89,13 @@ class _MessageInputState extends State<MessageInput> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                IconButton(
+                  onPressed: widget.canSend ? _pickImageFromDevice : null,
+                  tooltip: 'Attach image',
+                  icon: Icon(
+                    _attachedImageData == null ? Icons.image_outlined : Icons.image,
+                  ),
+                ),
                 Expanded(
                   child: TextField(
                     controller: controller,
@@ -83,7 +104,9 @@ class _MessageInputState extends State<MessageInput> {
                     maxLines: 5,
                     textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
-                      hintText: widget.canSend ? 'Message Sigma...' : 'Sigma is responding...',
+                      hintText: widget.canSend
+                          ? (_attachedImageData == null ? 'Message Sigma...' : 'Message about attached image...')
+                          : 'Sigma is responding...',
                     ),
                   ),
                 ),
