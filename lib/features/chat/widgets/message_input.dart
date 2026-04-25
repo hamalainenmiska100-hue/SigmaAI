@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class MessageInput extends StatefulWidget {
   final bool canSend;
   final bool isGenerating;
-  final Future<void> Function(String text) onSend;
+  final Future<void> Function(String text, {String? imageData}) onSend;
   final VoidCallback onStop;
 
   const MessageInput({
@@ -20,16 +20,57 @@ class MessageInput extends StatefulWidget {
 
 class _MessageInputState extends State<MessageInput> {
   final controller = TextEditingController();
+  String? _linkedImageUrl;
 
   Future<void> submit() async {
     final text = controller.text.trim();
+    final imageData = _linkedImageUrl?.trim();
 
-    if (text.isEmpty || !widget.canSend) {
+    if ((text.isEmpty && (imageData == null || imageData.isEmpty)) || !widget.canSend) {
       return;
     }
 
     controller.clear();
-    await widget.onSend(text);
+    setState(() => _linkedImageUrl = null);
+    await widget.onSend(text, imageData: imageData);
+  }
+
+  Future<void> _showImageLinkDialog() async {
+    final linkController = TextEditingController(text: _linkedImageUrl ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Link an image'),
+          content: TextField(
+            controller: linkController,
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              hintText: 'https://example.com/image.jpg',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(''),
+              child: const Text('Clear'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(linkController.text.trim()),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      _linkedImageUrl = result.isEmpty ? null : result;
+    });
   }
 
   @override
@@ -75,6 +116,13 @@ class _MessageInputState extends State<MessageInput> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                IconButton(
+                  onPressed: widget.canSend ? _showImageLinkDialog : null,
+                  tooltip: 'Link image',
+                  icon: Icon(
+                    _linkedImageUrl == null ? Icons.image_outlined : Icons.image,
+                  ),
+                ),
                 Expanded(
                   child: TextField(
                     controller: controller,
@@ -83,7 +131,9 @@ class _MessageInputState extends State<MessageInput> {
                     maxLines: 5,
                     textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
-                      hintText: widget.canSend ? 'Message Sigma...' : 'Sigma is responding...',
+                      hintText: widget.canSend
+                          ? (_linkedImageUrl == null ? 'Message Sigma...' : 'Message about linked image...')
+                          : 'Sigma is responding...',
                     ),
                   ),
                 ),
