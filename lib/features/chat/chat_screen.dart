@@ -61,10 +61,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom(jump: true);
   }
 
-  Future<void> _sendMessage(String text, {String? imageData}) async {
+  Future<void> _sendMessage(String text, {List<String> imageData = const []}) async {
     final trimmed = text.trim();
-    final normalizedImageData = imageData?.trim();
-    if ((trimmed.isEmpty && (normalizedImageData == null || normalizedImageData.isEmpty)) || _isGenerating) return;
+    final normalizedImageData = imageData.map((e) => e.trim()).where((e) => e.isNotEmpty).take(3).toList();
+    if ((trimmed.isEmpty && normalizedImageData.isEmpty) || _isGenerating) return;
     if (trimmed.length > AppConfig.maxMessageLength) return;
 
     final userMessage = ChatMessage(
