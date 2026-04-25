@@ -152,6 +152,8 @@ async function handleChatRequest(request, env, waitUntil) {
   }
   const orchestratorApiKey = String(env?.NVIDIA_API_KEY2 ?? '').trim() || apiKey;
 
+  const systemMessages = [];
+  const historyMessages = [];
   const messages = [];
   const firebaseSession = await getFirebaseSession();
   const { summary: activeSummary, stale: summaryStale } = firebaseSession
@@ -176,9 +178,9 @@ async function handleChatRequest(request, env, waitUntil) {
     );
   }
 
-  if (selectedInstruction) messages.push({ role: 'system', content: selectedInstruction });
+  if (selectedInstruction) systemMessages.push({ role: 'system', content: selectedInstruction });
   if (activeSummary) {
-    messages.push({
+    systemMessages.push({
       role: 'system',
       content:
         `Hidden adaptive context summary for "${normalizedMode}" mode:\n${activeSummary}\n` +
@@ -193,11 +195,11 @@ async function handleChatRequest(request, env, waitUntil) {
     if (!content && !itemImage) continue;
 
     if (itemImage && role === 'user' && !content) {
-      messages.push({ role, content: 'User shared an image earlier in this thread.' });
+      historyMessages.push({ role, content: 'User shared an image earlier in this thread.' });
       continue;
     }
 
-    messages.push({ role, content });
+    historyMessages.push({ role, content });
   }
 
   const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
@@ -222,25 +224,27 @@ async function handleChatRequest(request, env, waitUntil) {
     emitProgress,
   });
 
-  messages.push({
+  systemMessages.push({
     role: 'system',
     content:
       'You can receive live Wikipedia, Wikidata, and GDELT context from the system. If present, prioritize it over stale memory and use exact dates for time-sensitive answers.',
   });
 
   if (research.context) {
-    messages.push({
+    systemMessages.push({
       role: 'system',
       content:
         'You have live web research context from official Wikipedia/Wikidata APIs and GDELT in this conversation. Use it when relevant, prefer it over stale memory, and do not claim you lack web context when this data is present.',
     });
-    messages.push({ role: 'system', content: research.context });
-    messages.push({
+    systemMessages.push({ role: 'system', content: research.context });
+    systemMessages.push({
       role: 'system',
       content:
         'When web context is used, end the answer with a markdown section titled "Sources" containing direct bullet links from the provided URLs only.',
     });
   }
+
+  messages.push(...systemMessages, ...historyMessages);
 
   emitProgress('responding');
 
