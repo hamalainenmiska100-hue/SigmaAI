@@ -18,6 +18,7 @@
 const NVIDIA_CHAT_COMPLETIONS_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const TEXT_MODEL = 'mistralai/devstral-2-123b-instruct-2512';
 const VISION_MODEL = 'meta/llama-3.2-11b-vision-instruct';
+const VISION_PROMPT = 'Describe what is in this image in detail so it can be used as context for a separate text-only assistant.';
 
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_HISTORY_ITEMS = 40;
@@ -72,14 +73,14 @@ async function handleChatRequest(request, env) {
   }
 
   const message = sanitizeText(payload?.message, MAX_MESSAGE_CHARS);
-  const imageData = sanitizeImageUrl(payload?.imageData);
+  const imageData = sanitizeImageUrls(payload?.imageData);
   const languageTag = sanitizeText(payload?.languageTag, 32);
   const systemMode = sanitizeText(payload?.systemMode, 32).toLowerCase();
   const selectedInstruction = pickSystemInstruction(env, systemMode);
   const chatHistory = Array.isArray(payload?.chatHistory) ? payload.chatHistory.slice(-MAX_HISTORY_ITEMS) : [];
   const stream = payload?.stream !== false;
 
-  if (!message && !imageData) {
+  if (!message && imageData.length === 0) {
     return withCors(json({ error: 'Message or image is required' }, 400), request, env);
   }
 
@@ -104,20 +105,32 @@ async function handleChatRequest(request, env) {
     messages.push({ role, content });
   }
 
-  if (imageData) {
+  if (imageData.length > 0) {
+    const imageSummaries = [];
+    for (const imageUrl of imageData) {
+      try {
+        const summary = await summarizeWithVisionModel({
+          imageUrl,
+          apiKey,
+        });
+        if (summary) {
+          imageSummaries.push(summary);
+        }
+      } catch {}
+    }
     const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
+    const synthesizedImageContext = imageSummaries.length
+      ? imageSummaries.map((summary, i) => `Image ${i + 1} summary:\n${summary}`).join('\n\n')
+      : '';
+    const finalUserContent = [taggedMessage, synthesizedImageContext].filter(Boolean).join('\n\n').trim();
     messages.push({
       role: 'user',
-      content: [
-        ...(taggedMessage.isNotEmpty ? [{ type: 'text', text: taggedMessage }] : []),
-        { type: 'image_url', image_url: { url: imageData } },
-      ],
+      content: finalUserContent || 'User shared image(s).',
     });
   } else {
     const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
     messages.push({ role: 'user', content: taggedMessage });
   }
-  const modelToUse = imageData ? VISION_MODEL : TEXT_MODEL;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort('upstream-timeout'), UPSTREAM_TIMEOUT_MS);
@@ -131,7 +144,7 @@ async function handleChatRequest(request, env) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: modelToUse,
+        model: TEXT_MODEL,
         messages,
         stream,
         temperature: 0.2,
@@ -307,6 +320,48 @@ function sanitizeImageUrl(value) {
   if (url.startsWith('data:image/')) return url;
   if (url.startsWith('https://') || url.startsWith('http://')) return url;
   return '';
+}
+
+function sanitizeImageUrls(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeImageUrl(entry)).filter(Boolean).slice(0, 3);
+  }
+  const single = sanitizeImageUrl(value);
+  return single ? [single] : [];
+}
+
+async function summarizeWithVisionModel({ imageUrl, apiKey }) {
+  const payload = {
+    model: VISION_MODEL,
+    stream: false,
+    temperature: 0.2,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: VISION_PROMPT },
+          { type: 'image_url', image_url: { url: imageUrl } },
+        ],
+      },
+    ],
+  };
+
+  const response = await fetch(NVIDIA_CHAT_COMPLETIONS_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  });
+
+  if (!response.ok) {
+    return '';
+  }
+
+  const data = await safeJson(response);
+  return sanitizeText(extractTextContent(data), 4_000);
 }
 
 async function safeJson(response) {
