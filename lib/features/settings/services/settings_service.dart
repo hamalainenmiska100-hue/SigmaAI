@@ -1,20 +1,64 @@
-import '../../../core/config/app_config.dart';
 import '../../../core/storage/local_storage_service.dart';
 
+enum AssistantLanguage {
+  english,
+  swedish,
+  finnish,
+}
+
+enum AssistantTone {
+  normal,
+  unhinged,
+  spicy,
+}
+
+class UserSettings {
+  final AssistantLanguage language;
+  final AssistantTone tone;
+
+  const UserSettings({
+    required this.language,
+    required this.tone,
+  });
+}
+
 class SettingsService {
-  static const _key = 'sigmaai_custom_instructions';
+  static const _languageKey = 'sigmaai_language';
+  static const _toneKey = 'sigmaai_tone';
+
   final LocalStorageService _storage;
 
   SettingsService(this._storage);
 
-  Future<String> loadCustomInstructions() async {
-    return _storage.readString(_key);
+  Future<UserSettings> loadSettings() async {
+    final languageRaw = await _storage.readString(_languageKey);
+    final toneRaw = await _storage.readString(_toneKey);
+
+    return UserSettings(
+      language: _parseLanguage(languageRaw),
+      tone: _parseTone(toneRaw),
+    );
   }
 
-  Future<void> saveCustomInstructions(String value) async {
-    final text = value.length > AppConfig.maxCustomInstructionsLength
-        ? value.substring(0, AppConfig.maxCustomInstructionsLength)
-        : value;
-    await _storage.writeString(_key, text);
+  Future<void> saveLanguage(AssistantLanguage language) async {
+    await _storage.writeString(_languageKey, language.name);
+  }
+
+  Future<void> saveTone(AssistantTone tone) async {
+    await _storage.writeString(_toneKey, tone.name);
+  }
+
+  AssistantLanguage _parseLanguage(String value) {
+    for (final item in AssistantLanguage.values) {
+      if (item.name == value) return item;
+    }
+    return AssistantLanguage.english;
+  }
+
+  AssistantTone _parseTone(String value) {
+    for (final item in AssistantTone.values) {
+      if (item.name == value) return item;
+    }
+    return AssistantTone.normal;
   }
 }
