@@ -16,7 +16,8 @@
  */
 
 const NVIDIA_CHAT_COMPLETIONS_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL = 'mistralai/devstral-2-123b-instruct-2512';
+const TEXT_MODEL = 'mistralai/devstral-2-123b-instruct-2512';
+const VISION_MODEL = 'meta/llama-3.2-11b-vision-instruct';
 
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_HISTORY_ITEMS = 40;
@@ -86,7 +87,6 @@ async function handleChatRequest(request, env) {
   if (!apiKey) {
     return withCors(json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500), request, env);
   }
-
   const messages = [];
   if (selectedInstruction) messages.push({ role: 'system', content: selectedInstruction });
 
@@ -96,24 +96,20 @@ async function handleChatRequest(request, env) {
     const itemImage = sanitizeImageUrl(item?.imageData);
     if (!content && !itemImage) continue;
 
-    if (itemImage && role === 'user') {
-      messages.push({
-        role,
-        content: [
-          ...(content ? [{ type: 'text', text: content }] : []),
-          { type: 'image_url', image_url: { url: itemImage } },
-        ],
-      });
-    } else {
-      messages.push({ role, content });
+    if (itemImage && role === 'user' && !content) {
+      messages.push({ role, content: 'User shared an image earlier in this thread.' });
+      continue;
     }
+
+    messages.push({ role, content });
   }
 
   if (imageData) {
+    const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
     messages.push({
       role: 'user',
       content: [
-        ...([message, languageTag].filter(Boolean).join(' ').trim() ? [{ type: 'text', text: [message, languageTag].filter(Boolean).join(' ').trim() }] : []),
+        ...(taggedMessage.isNotEmpty ? [{ type: 'text', text: taggedMessage }] : []),
         { type: 'image_url', image_url: { url: imageData } },
       ],
     });
@@ -121,6 +117,7 @@ async function handleChatRequest(request, env) {
     const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
     messages.push({ role: 'user', content: taggedMessage });
   }
+  const modelToUse = imageData ? VISION_MODEL : TEXT_MODEL;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort('upstream-timeout'), UPSTREAM_TIMEOUT_MS);
@@ -134,7 +131,7 @@ async function handleChatRequest(request, env) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: modelToUse,
         messages,
         stream,
         temperature: 0.2,
@@ -228,7 +225,6 @@ async function handleChatRequest(request, env) {
     },
   });
 }
-
 
 function pickSystemInstruction(env, mode) {
   const normalized = String(mode ?? '').trim().toLowerCase();
