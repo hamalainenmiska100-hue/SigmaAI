@@ -88,15 +88,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     final assistantId = _uuid.v4();
-    final placeholder = ChatMessage(
-      id: assistantId,
-      role: 'assistant',
-      content: 'Thinking…',
-      createdAt: DateTime.now(),
-    );
+    var hasAssistantMessage = false;
 
     setState(() {
-      _messages = [..._messages, userMessage, placeholder];
+      _messages = [..._messages, userMessage];
       _isGenerating = true;
       _progressPhase = AiProgressPhase.thinking;
       _shouldAutoScroll = true;
@@ -112,7 +107,7 @@ class _ChatScreenState extends State<ChatScreen> {
       var streamed = '';
       final done = Completer<void>();
       _generationCompleter = done;
-      final requestHistory = _messages.where((m) => m.id != assistantId).toList();
+      final requestHistory = List<ChatMessage>.from(_messages);
 
       _activeStream = _aiService
           .streamMessage(
@@ -129,20 +124,6 @@ class _ChatScreenState extends State<ChatScreen> {
           if (event.phase != null) {
             setState(() {
               _progressPhase = event.phase!;
-              if (streamed.isEmpty) {
-                _messages = _messages
-                    .map(
-                      (m) => m.id == assistantId
-                          ? ChatMessage(
-                              id: m.id,
-                              role: m.role,
-                              content: _phaseLabel(event.phase!),
-                              createdAt: m.createdAt,
-                            )
-                          : m,
-                    )
-                    .toList();
-              }
             });
             return;
           }
@@ -151,9 +132,22 @@ class _ChatScreenState extends State<ChatScreen> {
             streamed += event.delta!;
             setState(() {
               _progressPhase = AiProgressPhase.responding;
-              _messages = _messages
-                  .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
-                  .toList();
+              if (!hasAssistantMessage) {
+                hasAssistantMessage = true;
+                _messages = [
+                  ..._messages,
+                  ChatMessage(
+                    id: assistantId,
+                    role: 'assistant',
+                    content: streamed,
+                    createdAt: DateTime.now(),
+                  ),
+                ];
+              } else {
+                _messages = _messages
+                    .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
+                    .toList();
+              }
             });
             _scrollToBottom();
           }
@@ -181,7 +175,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _isGenerating = false;
-        _messages = _messages.where((m) => m.id != assistantId || m.content.trim().isNotEmpty).toList();
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.displayMessage)));
     } catch (e, stackTrace) {
@@ -190,7 +183,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _isGenerating = false;
-        _messages = _messages.where((m) => m.id != assistantId || m.content.trim().isNotEmpty).toList();
       });
     } finally {
       await _activeStream?.cancel();
@@ -281,17 +273,6 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     });
-  }
-
-  String _phaseLabel(AiProgressPhase phase) {
-    switch (phase) {
-      case AiProgressPhase.searching:
-        return 'Searching…';
-      case AiProgressPhase.responding:
-        return 'Responding…';
-      case AiProgressPhase.thinking:
-        return 'Thinking…';
-    }
   }
 
   @override
