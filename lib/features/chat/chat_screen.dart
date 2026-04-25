@@ -205,6 +205,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _createThread() async {
+    if (_isGenerating) return;
     final thread = ChatThread(id: _uuid.v4(), title: 'New chat', updatedAt: DateTime.now());
     setState(() {
       _activeThread = thread;
@@ -216,6 +217,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _switchThread(ChatThread thread) async {
+    if (_isGenerating) return;
     final messages = await _chatStore.loadMessages(thread.id);
     if (!mounted) return;
     setState(() {
@@ -255,7 +257,10 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('Sigma'),
         actions: [
-          IconButton(onPressed: _createThread, icon: const Icon(Icons.add_comment_outlined)),
+          IconButton(
+            onPressed: _isGenerating ? null : _createThread,
+            icon: const Icon(Icons.add_comment_outlined),
+          ),
         ],
       ),
       drawer: Drawer(
@@ -268,7 +273,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   leading: const Icon(Icons.chat_outlined),
                   title: Text(thread.title),
                   selected: thread.id == _activeThread?.id,
-                  onTap: () => _switchThread(thread),
+                  onTap: _isGenerating ? null : () => _switchThread(thread),
                 ),
             ],
           ),
