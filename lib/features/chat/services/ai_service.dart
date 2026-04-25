@@ -21,7 +21,7 @@ class AiService {
     required List<ChatMessage> history,
     required String languageTag,
     required String systemMode,
-    String? imageData,
+    List<String> imageData = const [],
   }) async* {
     final trimmedHistory = history
         .take(history.length > 16 ? 16 : history.length)
@@ -43,7 +43,7 @@ class AiService {
         'languageTag': languageTag,
         'systemMode': systemMode,
         'chatHistory': trimmedHistory,
-        if (imageData != null) 'imageData': imageData,
+        if (imageData.isNotEmpty) 'imageData': imageData,
         'stream': true,
       });
 

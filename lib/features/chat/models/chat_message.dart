@@ -3,14 +3,14 @@ class ChatMessage {
   final String role;
   final String content;
   final DateTime createdAt;
-  final String? imageData;
+  final List<String> imageData;
 
   const ChatMessage({
     required this.id,
     required this.role,
     required this.content,
     required this.createdAt,
-    this.imageData,
+    this.imageData = const [],
   });
 
   bool get isUser => role == 'user';
@@ -27,12 +27,18 @@ class ChatMessage {
   }
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final rawImageData = json['imageData'];
+    final images = rawImageData is List
+        ? rawImageData.map((e) => e.toString()).where((e) => e.isNotEmpty).take(3).toList()
+        : rawImageData is String && rawImageData.isNotEmpty
+            ? [rawImageData]
+            : <String>[];
     return ChatMessage(
       id: json['id'] as String,
       role: json['role'] as String,
       content: (json['content'] ?? '').toString(),
       createdAt: DateTime.parse(json['createdAt'] as String),
-      imageData: json['imageData'] as String?,
+      imageData: images,
     );
   }
 }
