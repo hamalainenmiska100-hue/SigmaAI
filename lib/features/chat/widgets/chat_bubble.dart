@@ -9,13 +9,13 @@ import 'package:markdown/markdown.dart' as md;
 class ChatBubble extends StatelessWidget {
   final String content;
   final bool isUser;
-  final String? imageData;
+  final List<String> imageData;
 
   const ChatBubble({
     super.key,
     required this.content,
     required this.isUser,
-    this.imageData,
+    this.imageData = const [],
   });
 
   @override
@@ -45,9 +45,16 @@ class ChatBubble extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (imageData != null && imageData!.isNotEmpty) ...[
-                  _ImagePreview(
-                    imageUrl: imageData!,
+                if (imageData.isNotEmpty) ...[
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final image in imageData.take(3))
+                        _ImagePreview(
+                          imageUrl: image,
+                        ),
+                    ],
                   ),
                   if (content.trim().isNotEmpty) const SizedBox(height: 8),
                 ],
