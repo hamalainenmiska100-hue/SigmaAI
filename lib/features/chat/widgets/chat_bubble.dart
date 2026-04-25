@@ -6,11 +6,13 @@ import 'package:markdown/markdown.dart' as md;
 class ChatBubble extends StatelessWidget {
   final String content;
   final bool isUser;
+  final String? imageData;
 
   const ChatBubble({
     super.key,
     required this.content,
     required this.isUser,
+    this.imageData,
   });
 
   @override
@@ -37,20 +39,95 @@ class ChatBubble extends StatelessWidget {
                     border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.16)),
                   )
                 : null,
-            child: isUser
-                ? SelectableText(
-                    content,
-                    style: TextStyle(
-                      color: colors.onPrimaryContainer,
-                    ),
-                  )
-                : MarkdownBody(
-                    data: content,
-                    selectable: true,
-                    builders: {
-                      'code': InlineCodeBuilder(),
-                    },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (imageData != null && imageData!.isNotEmpty) ...[
+                  _ImagePreview(
+                    imageUrl: imageData!,
                   ),
+                  if (content.trim().isNotEmpty) const SizedBox(height: 8),
+                ],
+                if (content.trim().isNotEmpty)
+                  isUser
+                      ? SelectableText(
+                          content,
+                          style: TextStyle(
+                            color: colors.onPrimaryContainer,
+                          ),
+                        )
+                      : MarkdownBody(
+                          data: content,
+                          selectable: true,
+                          builders: {
+                            'code': InlineCodeBuilder(),
+                          },
+                        ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ImagePreview extends StatelessWidget {
+  final String imageUrl;
+
+  const _ImagePreview({
+    required this.imageUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () {
+        showDialog<void>(
+          context: context,
+          builder: (_) => Dialog.fullscreen(
+            child: Stack(
+              children: [
+                InteractiveViewer(
+                  minScale: 0.8,
+                  maxScale: 4,
+                  child: Center(
+                    child: Image.network(
+                      imageUrl,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: IconButton.filledTonal(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxHeight: 280,
+            maxWidth: 360,
+          ),
+          child: Image.network(
+            imageUrl,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              color: colors.surfaceContainerHighest,
+              padding: const EdgeInsets.all(12),
+              child: const Text('Unable to load image preview'),
+            ),
           ),
         ),
       ),
