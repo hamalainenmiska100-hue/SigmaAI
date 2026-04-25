@@ -61,9 +61,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom(jump: true);
   }
 
-  Future<void> _sendMessage(String text) async {
+  Future<void> _sendMessage(String text, {String? imageData}) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || _isGenerating) return;
+    final normalizedImageData = imageData?.trim();
+    if ((trimmed.isEmpty && (normalizedImageData == null || normalizedImageData.isEmpty)) || _isGenerating) return;
     if (trimmed.length > AppConfig.maxMessageLength) return;
 
     final userMessage = ChatMessage(
@@ -71,6 +72,7 @@ class _ChatScreenState extends State<ChatScreen> {
       role: 'user',
       content: trimmed,
       createdAt: DateTime.now(),
+      imageData: normalizedImageData,
     );
 
     final assistantId = _uuid.v4();
@@ -85,7 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages = [..._messages, userMessage, placeholder];
       _isGenerating = true;
     });
-    await _persistCurrentThread(_messages, titleHint: trimmed);
+    await _persistCurrentThread(_messages, titleHint: trimmed.isNotEmpty ? trimmed : 'Image message');
     _scrollToBottom();
 
     final settings = await _settingsService.loadSettings();
@@ -104,6 +106,7 @@ class _ChatScreenState extends State<ChatScreen> {
             history: requestHistory,
             languageTag: languageTag,
             systemMode: systemMode,
+            imageData: normalizedImageData,
           )
           .listen(
         (delta) {
@@ -283,6 +286,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       return ChatBubble(
                         content: message.content,
                         isUser: message.isUser,
+                        imageData: message.imageData,
                       );
                     },
                   ),
