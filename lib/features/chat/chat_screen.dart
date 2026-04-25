@@ -278,7 +278,7 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: _messages.isEmpty
-                ? const EmptyState(text: 'Ask anything.')
+                ? const EmptyState(text: 'idk ask anything gng ✌️ also youll find languig settings in uh the fucking settings tab and also some personalization settings. bye gng 😇✌️')
                 : ListView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.only(top: 8, bottom: 8),
