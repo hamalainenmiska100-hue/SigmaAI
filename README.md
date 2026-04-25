@@ -40,13 +40,24 @@ This MVP stores data locally with `shared_preferences`:
 
 ## iOS build
 
-You can generate iOS platform files and build a release app bundle with:
+You can generate iOS platform files and build a release IPA with:
 
 ```bash
 flutter pub get
 flutter create --platforms=ios .
-flutter build ios --release --no-codesign
+flutter build ipa --release --no-codesign
 ```
 
 This repository also includes a GitHub Actions workflow (`.github/workflows/build-ios.yml`)
-that builds iOS on `macos-latest` and uploads `build/ios` as an artifact.
+that builds iOS on `macos-latest` and uploads the generated `.ipa` artifact.
+
+## CI build workflows
+
+GitHub Actions workflows are included for platform build artifacts:
+
+- Android 5 APK (armeabi-v7a): `.github/workflows/build-android.yml`
+- Android latest APK (arm64-v8a): `.github/workflows/build-android.yml`
+- iOS IPA (`--no-codesign`): `.github/workflows/build-ios.yml`
+- Windows 10 executable: `.github/workflows/build-windows.yml`
+
+Each workflow uploads its build output as an artifact (`.apk`, `.ipa`, `.exe`).

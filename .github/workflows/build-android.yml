@@ -1,0 +1,76 @@
+name: Build Flutter Android APKs
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-android-5:
+    name: Android 5 APK (armeabi-v7a)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate Android platform project
+        run: flutter create --platforms=android .
+
+      - name: Build Android 5 APK
+        run: flutter build apk --release --target-platform android-arm --split-per-abi
+
+      - name: Upload Android 5 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-5-apk-armeabi-v7a
+          path: build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+
+  build-android-latest:
+    name: Android Latest APK (arm64-v8a)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate Android platform project
+        run: flutter create --platforms=android .
+
+      - name: Build Android latest APK
+        run: flutter build apk --release --target-platform android-arm64 --split-per-abi
+
+      - name: Upload Android latest APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-latest-apk-arm64-v8a
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
