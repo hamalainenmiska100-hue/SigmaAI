@@ -12,16 +12,12 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _index = 0;
+  final _screens = const [ChatScreen(), SettingsScreen()];
 
   @override
   Widget build(BuildContext context) {
-    final screens = [const ChatScreen(), const SettingsScreen()];
-
     return Scaffold(
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 300),
-        child: IndexedStack(key: ValueKey(_index), index: _index, children: screens),
-      ),
+      body: IndexedStack(index: _index, children: _screens),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (value) => setState(() => _index = value),
