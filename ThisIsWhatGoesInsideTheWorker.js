@@ -9,6 +9,9 @@
  *
  * Optional env vars:
  *   SYSTEM_INSTRUCTION
+ *   SYSTEM_INSTRUCTION_NORMAL
+ *   SYSTEM_INSTRUCTION_UNHINGED
+ *   SYSTEM_INSTRUCTION_SPICY
  *   CORS_ALLOW_ORIGIN (default: *)
  */
 
@@ -69,8 +72,9 @@ async function handleChatRequest(request, env) {
 
   const message = sanitizeText(payload?.message, MAX_MESSAGE_CHARS);
   const imageData = sanitizeImageUrl(payload?.imageData);
-  const customInstructions = sanitizeText(payload?.customInstructions, 4_000);
-  const systemInstruction = sanitizeText(env?.SYSTEM_INSTRUCTION, 4_000);
+  const languageTag = sanitizeText(payload?.languageTag, 32);
+  const systemMode = sanitizeText(payload?.systemMode, 32).toLowerCase();
+  const selectedInstruction = pickSystemInstruction(env, systemMode);
   const chatHistory = Array.isArray(payload?.chatHistory) ? payload.chatHistory.slice(-MAX_HISTORY_ITEMS) : [];
   const stream = payload?.stream !== false;
 
@@ -84,8 +88,7 @@ async function handleChatRequest(request, env) {
   }
 
   const messages = [];
-  if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
-  if (customInstructions) messages.push({ role: 'system', content: customInstructions });
+  if (selectedInstruction) messages.push({ role: 'system', content: selectedInstruction });
 
   for (const item of chatHistory) {
     const role = item?.role === 'assistant' ? 'assistant' : 'user';
@@ -110,12 +113,13 @@ async function handleChatRequest(request, env) {
     messages.push({
       role: 'user',
       content: [
-        ...(message ? [{ type: 'text', text: message }] : []),
+        ...([message, languageTag].filter(Boolean).join(' ').trim() ? [{ type: 'text', text: [message, languageTag].filter(Boolean).join(' ').trim() }] : []),
         { type: 'image_url', image_url: { url: imageData } },
       ],
     });
   } else {
-    messages.push({ role: 'user', content: message });
+    const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
+    messages.push({ role: 'user', content: taggedMessage });
   }
 
   const controller = new AbortController();
@@ -223,6 +227,25 @@ async function handleChatRequest(request, env) {
       'x-accel-buffering': 'no',
     },
   });
+}
+
+
+function pickSystemInstruction(env, mode) {
+  const normalized = String(mode ?? '').trim().toLowerCase();
+
+  if (normalized === 'unhinged') {
+    return sanitizeText(env?.SYSTEM_INSTRUCTION_UNHINGED, 4_000);
+  }
+
+  if (normalized === 'spicy') {
+    return sanitizeText(env?.SYSTEM_INSTRUCTION_SPICY, 4_000);
+  }
+
+  if (normalized === 'normal') {
+    return sanitizeText(env?.SYSTEM_INSTRUCTION_NORMAL, 4_000);
+  }
+
+  return sanitizeText(env?.SYSTEM_INSTRUCTION_NORMAL ?? env?.SYSTEM_INSTRUCTION, 4_000);
 }
 
 function extractDeltaFromEvent(rawEvent) {

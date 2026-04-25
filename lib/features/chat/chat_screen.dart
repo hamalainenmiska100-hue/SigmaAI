@@ -86,14 +86,17 @@ class _ChatScreenState extends State<ChatScreen> {
     await _persistCurrentThread(_messages, titleHint: trimmed);
     _scrollToBottom();
 
-    final customInstructions = await _settingsService.loadCustomInstructions();
+    final settings = await _settingsService.loadSettings();
+    final languageTag = _languageTag(settings.language);
+    final systemMode = settings.tone.name;
 
     try {
       var streamed = '';
       await for (final delta in _aiService.streamMessage(
         message: trimmed,
-        customInstructions: customInstructions,
         history: _messages,
+        languageTag: languageTag,
+        systemMode: systemMode,
       )) {
         streamed += delta;
         if (!mounted) return;
@@ -124,6 +127,17 @@ class _ChatScreenState extends State<ChatScreen> {
         _isGenerating = false;
         _messages = _messages.where((m) => m.id != assistantId || m.content.trim().isNotEmpty).toList();
       });
+    }
+  }
+
+  String _languageTag(AssistantLanguage language) {
+    switch (language) {
+      case AssistantLanguage.english:
+        return '[ENGLISH]';
+      case AssistantLanguage.swedish:
+        return '[SWEDISH]';
+      case AssistantLanguage.finnish:
+        return '[FINNISH]';
     }
   }
 

@@ -13,8 +13,9 @@ class AiService {
 
   Stream<String> streamMessage({
     required String message,
-    required String customInstructions,
     required List<ChatMessage> history,
+    required String languageTag,
+    required String systemMode,
     String? imageData,
   }) async* {
     final trimmedHistory = history
@@ -35,7 +36,8 @@ class AiService {
       })
       ..body = jsonEncode({
         'message': message,
-        'customInstructions': customInstructions,
+        'languageTag': languageTag,
+        'systemMode': systemMode,
         'chatHistory': trimmedHistory,
         if (imageData != null) 'imageData': imageData,
         'stream': true,
