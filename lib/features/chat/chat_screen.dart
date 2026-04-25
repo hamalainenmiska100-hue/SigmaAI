@@ -33,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   List<ChatThread> _threads = [];
   ChatThread? _activeThread;
   bool _isGenerating = false;
+  StreamSubscription<String>? _activeStream;
 
   @override
   void initState() {
@@ -92,21 +93,32 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       var streamed = '';
-      await for (final delta in _aiService.streamMessage(
-        message: trimmed,
-        history: _messages,
-        languageTag: languageTag,
-        systemMode: systemMode,
-      )) {
-        streamed += delta;
-        if (!mounted) return;
-        setState(() {
-          _messages = _messages
-              .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
-              .toList();
-        });
-        _scrollToBottom();
-      }
+      final done = Completer<void>();
+
+      _activeStream = _aiService
+          .streamMessage(
+            message: trimmed,
+            history: _messages,
+            languageTag: languageTag,
+            systemMode: systemMode,
+          )
+          .listen(
+        (delta) {
+          streamed += delta;
+          if (!mounted) return;
+          setState(() {
+            _messages = _messages
+                .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
+                .toList();
+          });
+          _scrollToBottom();
+        },
+        onError: done.completeError,
+        onDone: () => done.complete(),
+        cancelOnError: true,
+      );
+
+      await done.future;
 
       await _persistCurrentThread(_messages);
       if (!mounted) return;
@@ -127,7 +139,21 @@ class _ChatScreenState extends State<ChatScreen> {
         _isGenerating = false;
         _messages = _messages.where((m) => m.id != assistantId || m.content.trim().isNotEmpty).toList();
       });
+    } finally {
+      await _activeStream?.cancel();
+      _activeStream = null;
     }
+  }
+
+  Future<void> _stopGeneration() async {
+    if (!_isGenerating) return;
+    await _activeStream?.cancel();
+    _activeStream = null;
+    if (!mounted) return;
+    setState(() {
+      _isGenerating = false;
+    });
+    await _persistCurrentThread(_messages);
   }
 
   String _languageTag(AssistantLanguage language) {
@@ -198,6 +224,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _activeStream?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -246,9 +273,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
           ),
           MessageInput(
-            enabled: !_isGenerating,
+            canSend: !_isGenerating,
             onSend: _sendMessage,
             isGenerating: _isGenerating,
+            onStop: _stopGeneration,
           ),
         ],
       ),
