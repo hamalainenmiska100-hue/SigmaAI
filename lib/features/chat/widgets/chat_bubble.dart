@@ -61,7 +61,7 @@ class ChatBubble extends StatelessWidget {
 class InlineCodeBuilder extends MarkdownElementBuilder {
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    final isInline = element.parent?.tag != 'pre';
+    final isInline = !element.textContent.contains('\n');
     if (!isInline) {
       return null;
     }

@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 
 class MessageInput extends StatefulWidget {
-  final bool enabled;
+  final bool canSend;
   final bool isGenerating;
   final Future<void> Function(String text) onSend;
+  final VoidCallback onStop;
 
   const MessageInput({
     super.key,
-    required this.enabled,
+    required this.canSend,
     required this.isGenerating,
     required this.onSend,
+    required this.onStop,
   });
 
   @override
@@ -22,7 +24,7 @@ class _MessageInputState extends State<MessageInput> {
   Future<void> submit() async {
     final text = controller.text.trim();
 
-    if (text.isEmpty || !widget.enabled) {
+    if (text.isEmpty || !widget.canSend) {
       return;
     }
 
@@ -58,20 +60,14 @@ class _MessageInputState extends State<MessageInput> {
               child: widget.isGenerating
                   ? Padding(
                       key: const ValueKey('generating-indicator'),
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: colors.primary,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          const Text('Generating response...'),
-                        ],
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          minHeight: 4,
+                          color: colors.primary,
+                          backgroundColor: colors.surfaceContainerHighest,
+                        ),
                       ),
                     )
                   : const SizedBox.shrink(key: ValueKey('idle-indicator')),
@@ -82,19 +78,32 @@ class _MessageInputState extends State<MessageInput> {
                 Expanded(
                   child: TextField(
                     controller: controller,
-                    enabled: widget.enabled,
+                    enabled: widget.canSend,
                     minLines: 1,
                     maxLines: 5,
                     textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
-                      hintText: widget.enabled ? 'Message Sigma...' : 'Sigma is responding...',
+                      hintText: widget.canSend ? 'Message Sigma...' : 'Sigma is responding...',
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: widget.enabled ? submit : null,
-                  icon: const Icon(Icons.arrow_upward),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) => ScaleTransition(scale: animation, child: child),
+                  child: widget.isGenerating
+                      ? IconButton.filled(
+                          key: const ValueKey('stop-button'),
+                          onPressed: widget.onStop,
+                          icon: const Icon(Icons.stop_rounded),
+                        )
+                      : IconButton.filled(
+                          key: const ValueKey('send-button'),
+                          onPressed: widget.canSend ? submit : null,
+                          icon: const Icon(Icons.arrow_upward),
+                        ),
                 ),
               ],
             ),
