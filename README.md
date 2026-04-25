@@ -35,6 +35,7 @@ This MVP stores data locally with `shared_preferences`:
 ## Notes
 
 - Chat supports text streaming + image inputs via a Cloudflare Worker proxy.
+- Worker-side retrieval now runs on every answer: it generates Wikipedia/Wikidata queries with the same text model, calls official Wikimedia APIs, auto-fixes malformed query JSON, and injects fresh context before final generation.
 - Image attachments are compressed locally before storage and upload.
 
 ## iOS build
