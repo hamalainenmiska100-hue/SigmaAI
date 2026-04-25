@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/image_attachment_service.dart';
+
 class MessageInput extends StatefulWidget {
   final bool canSend;
   final bool isGenerating;
@@ -20,56 +22,27 @@ class MessageInput extends StatefulWidget {
 
 class _MessageInputState extends State<MessageInput> {
   final controller = TextEditingController();
-  String? _linkedImageUrl;
+  final _imageAttachmentService = ImageAttachmentService();
+  String? _attachedImageData;
 
   Future<void> submit() async {
     final text = controller.text.trim();
-    final imageData = _linkedImageUrl?.trim();
+    final imageData = _attachedImageData?.trim();
 
     if ((text.isEmpty && (imageData == null || imageData.isEmpty)) || !widget.canSend) {
       return;
     }
 
     controller.clear();
-    setState(() => _linkedImageUrl = null);
+    setState(() => _attachedImageData = null);
     await widget.onSend(text, imageData: imageData);
   }
 
-  Future<void> _showImageLinkDialog() async {
-    final linkController = TextEditingController(text: _linkedImageUrl ?? '');
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Link an image'),
-          content: TextField(
-            controller: linkController,
-            autofocus: true,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              hintText: 'https://example.com/image.jpg',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(''),
-              child: const Text('Clear'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(linkController.text.trim()),
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-    if (!mounted || result == null) return;
+  Future<void> _pickImageFromDevice() async {
+    final picked = await _imageAttachmentService.pickCompressedImageDataUri();
+    if (!mounted || picked == null) return;
     setState(() {
-      _linkedImageUrl = result.isEmpty ? null : result;
+      _attachedImageData = picked;
     });
   }
 
@@ -117,10 +90,10 @@ class _MessageInputState extends State<MessageInput> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 IconButton(
-                  onPressed: widget.canSend ? _showImageLinkDialog : null,
-                  tooltip: 'Link image',
+                  onPressed: widget.canSend ? _pickImageFromDevice : null,
+                  tooltip: 'Attach image',
                   icon: Icon(
-                    _linkedImageUrl == null ? Icons.image_outlined : Icons.image,
+                    _attachedImageData == null ? Icons.image_outlined : Icons.image,
                   ),
                 ),
                 Expanded(
@@ -132,7 +105,7 @@ class _MessageInputState extends State<MessageInput> {
                     textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
                       hintText: widget.canSend
-                          ? (_linkedImageUrl == null ? 'Message Sigma...' : 'Message about linked image...')
+                          ? (_attachedImageData == null ? 'Message Sigma...' : 'Message about attached image...')
                           : 'Sigma is responding...',
                     ),
                   ),
