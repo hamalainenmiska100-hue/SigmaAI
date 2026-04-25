@@ -162,6 +162,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _stopGeneration() async {
     if (!_isGenerating) return;
+    _aiService.cancelActiveRequest();
     await _activeStream?.cancel();
     _activeStream = null;
     if (_generationCompleter != null && !_generationCompleter!.isCompleted) {
@@ -243,6 +244,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _activeStream?.cancel();
+    _aiService.cancelActiveRequest();
     _scrollController.dispose();
     super.dispose();
   }
