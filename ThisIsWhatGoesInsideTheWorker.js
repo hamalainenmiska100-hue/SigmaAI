@@ -24,7 +24,8 @@ const VISION_PROMPT = 'Describe what is in this image in detail so it can be use
 const WIKIPEDIA_API_URL = 'https://en.wikipedia.org/w/api.php';
 const WIKIDATA_SEARCH_API_URL = 'https://www.wikidata.org/w/api.php';
 const WIKIDATA_ENTITY_DATA_BASE_URL = 'https://www.wikidata.org/wiki/Special:EntityData';
-const SEARCH_QUERY_SYSTEM_PROMPT = `You generate concise web search queries for Wikipedia and Wikidata.\nReturn ONLY valid JSON with this exact shape:\n{"wikipedia": ["query 1", "query 2"], "wikidata": ["query 1", "query 2"]}\nRules:\n- Keep each query directly relevant to the user request.\n- Use 1 to 3 queries per array.\n- Prefer entities, facts, events, places, people, products, laws, standards, and dates when relevant.\n- Keep queries short and specific.\n- No markdown, no prose, no explanations.`;
+const GDELT_DOC_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
+const SEARCH_QUERY_SYSTEM_PROMPT = `You generate concise web search queries for Wikipedia, Wikidata, and GDELT news.\nReturn ONLY valid JSON with this exact shape:\n{"wikipedia": ["query 1", "query 2"], "wikidata": ["query 1", "query 2"], "gdelt": ["query 1", "query 2"]}\nRules:\n- Keep each query directly relevant to the user request.\n- Use 1 to 3 queries per array.\n- Prefer entities, facts, events, places, people, products, laws, standards, and dates when relevant.\n- Keep queries short and specific.\n- GDELT queries should be optimized for recent news/event discovery.\n- No markdown, no prose, no explanations.`;
 const WIKIPEDIA_LATEST_HINT_REGEX = /\b(latest|today|current|recent|newest|update|updated|as of|right now|this week|this month|this year)\b/i;
 
 const MAX_MESSAGE_CHARS = 16_000;
@@ -188,14 +189,14 @@ async function handleChatRequest(request, env, waitUntil) {
   messages.push({
     role: 'system',
     content:
-      'You can receive live Wikipedia and Wikidata context from the system. If present, prioritize it over stale memory and use exact dates for time-sensitive answers.',
+      'You can receive live Wikipedia, Wikidata, and GDELT context from the system. If present, prioritize it over stale memory and use exact dates for time-sensitive answers.',
   });
 
   if (webContext) {
     messages.push({
       role: 'system',
       content:
-        'You have live web research context from official Wikipedia and Wikidata APIs in this conversation. Use it when relevant, prefer it over stale memory, and do not claim you lack web context when this data is present.',
+        'You have live web research context from official Wikipedia/Wikidata APIs and GDELT in this conversation. Use it when relevant, prefer it over stale memory, and do not claim you lack web context when this data is present.',
     });
     messages.push({
       role: 'system',
@@ -372,7 +373,7 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
   if (!userMessage) return '';
 
   const queryPlan = await generateWikimediaQueries({ apiKey, userMessage, chatHistory });
-  if (!queryPlan.wikipedia.length && !queryPlan.wikidata.length) {
+  if (!queryPlan.wikipedia.length && !queryPlan.wikidata.length && !queryPlan.gdelt.length) {
     return '';
   }
 
@@ -380,9 +381,15 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
   const wikidataQueries = queryPlan.wikidata.length
     ? queryPlan.wikidata
     : wikipediaResults.map((item) => item.title).slice(0, 3);
+  const gdeltQueries = queryPlan.gdelt.length
+    ? queryPlan.gdelt
+    : queryPlan.wikipedia.length
+      ? queryPlan.wikipedia
+      : [userMessage];
   const wikidataResults = await searchWikidata(wikidataQueries);
+  const gdeltResults = await searchGdelt(gdeltQueries);
 
-  if (!wikipediaResults.length && !wikidataResults.length) {
+  if (!wikipediaResults.length && !wikidataResults.length && !gdeltResults.length) {
     return '';
   }
 
@@ -397,6 +404,11 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
     const aliases = item.aliases.length ? ` [aliases: ${item.aliases.join(', ')}]` : '';
     return `${index + 1}. ${item.label} (${item.id})${description}${aliases} (URL: ${item.url})`;
   });
+  const gdeltLines = gdeltResults.map((item, index) => {
+    const source = item.source ? ` [source: ${item.source}]` : '';
+    const seenAt = item.seenDate ? ` [seen: ${item.seenDate}]` : '';
+    return `${index + 1}. ${item.title}${source}${seenAt} (URL: ${item.url})`;
+  });
 
   const sections = [`Live Wikimedia context generated at ${new Date().toISOString()}:`];
   if (wikiLines.length) {
@@ -404,6 +416,9 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
   }
   if (wikidataLines.length) {
     sections.push(['Wikidata results (official API):', ...wikidataLines].join('\n'));
+  }
+  if (gdeltLines.length) {
+    sections.push(['GDELT recent news results (official API):', ...gdeltLines].join('\n'));
   }
 
   return sections.join('\n\n');
@@ -440,7 +455,7 @@ async function generateWikimediaQueries({ apiKey, userMessage, chatHistory }) {
   }
 
   const parsed = parseQueryPlan(raw);
-  if (parsed.wikipedia.length || parsed.wikidata.length) {
+  if (parsed.wikipedia.length || parsed.wikidata.length || parsed.gdelt.length) {
     return parsed;
   }
 
@@ -449,7 +464,7 @@ async function generateWikimediaQueries({ apiKey, userMessage, chatHistory }) {
 
 function parseQueryPlan(raw) {
   const cleaned = sanitizeText(raw, 4_000);
-  if (!cleaned) return { wikipedia: [], wikidata: [] };
+  if (!cleaned) return { wikipedia: [], wikidata: [], gdelt: [] };
 
   const candidates = [
     cleaned,
@@ -461,17 +476,17 @@ function parseQueryPlan(raw) {
 
   for (const candidate of candidates) {
     const parsed = tryParseQueryPlan(candidate);
-    if (parsed.wikipedia.length || parsed.wikidata.length) {
+    if (parsed.wikipedia.length || parsed.wikidata.length || parsed.gdelt.length) {
       return parsed;
     }
   }
 
   const fallbackFromText = parseQueryPlanFromLooseText(cleaned);
-  if (fallbackFromText.wikipedia.length || fallbackFromText.wikidata.length) {
+  if (fallbackFromText.wikipedia.length || fallbackFromText.wikidata.length || fallbackFromText.gdelt.length) {
     return fallbackFromText;
   }
 
-  return { wikipedia: [], wikidata: [] };
+  return { wikipedia: [], wikidata: [], gdelt: [] };
 }
 
 function tryParseQueryPlan(candidate) {
@@ -479,14 +494,15 @@ function tryParseQueryPlan(candidate) {
     const parsed = JSON.parse(candidate);
     return normalizeQueryPlan(parsed);
   } catch {
-    return { wikipedia: [], wikidata: [] };
+    return { wikipedia: [], wikidata: [], gdelt: [] };
   }
 }
 
 function normalizeQueryPlan(input) {
   const wikipedia = normalizeQueryArray(input?.wikipedia);
   const wikidata = normalizeQueryArray(input?.wikidata);
-  return { wikipedia, wikidata };
+  const gdelt = normalizeQueryArray(input?.gdelt);
+  return { wikipedia, wikidata, gdelt };
 }
 
 function normalizeQueryArray(value) {
@@ -535,12 +551,13 @@ function parseQueryPlanFromLooseText(value) {
   return {
     wikipedia: picked,
     wikidata: picked,
+    gdelt: picked,
   };
 }
 
 function fallbackSearchQueries(userMessage) {
   const base = sanitizeText(userMessage, 140);
-  if (!base) return { wikipedia: [], wikidata: [] };
+  if (!base) return { wikipedia: [], wikidata: [], gdelt: [] };
 
   const compact = base.replace(/\s+/g, ' ').trim();
   const withoutPunctuation = compact.replace(/[!?.,:;()\[\]{}]/g, ' ');
@@ -554,6 +571,7 @@ function fallbackSearchQueries(userMessage) {
   return {
     wikipedia: uniqueNonEmpty([`${compact}${recentHint}`.trim(), focused && `${focused}${recentHint}`.trim()]),
     wikidata: uniqueNonEmpty([compact, focused]),
+    gdelt: uniqueNonEmpty([`${compact}${recentHint}`.trim(), focused && `${focused} breaking news`.trim()]),
   };
 }
 
@@ -635,6 +653,41 @@ async function searchWikidata(queries) {
   }
 
   return dedupeBy(results, (entry) => entry.id);
+}
+
+async function searchGdelt(queries) {
+  const uniqueQueries = uniqueNonEmpty(queries).slice(0, 2);
+  const results = [];
+
+  for (const query of uniqueQueries) {
+    const url = new URL(GDELT_DOC_API_URL);
+    url.searchParams.set('query', query);
+    url.searchParams.set('mode', 'ArtList');
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('maxrecords', '5');
+    url.searchParams.set('sort', 'DateDesc');
+
+    const data = await fetchWithTimeoutJson(url.toString(), WIKI_FETCH_TIMEOUT_MS);
+    const articles = data?.articles;
+    if (!Array.isArray(articles)) continue;
+
+    for (const article of articles) {
+      const title = sanitizeText(article?.title, 220);
+      const articleUrl = sanitizeText(article?.url, 500);
+      if (!title || !articleUrl) continue;
+
+      results.push({
+        title,
+        url: articleUrl,
+        source: sanitizeText(article?.sourcecountry, 24) || sanitizeText(article?.domain, 120),
+        seenDate: sanitizeText(article?.seendate, 40),
+      });
+
+      if (results.length >= 6) return dedupeBy(results, (entry) => entry.url);
+    }
+  }
+
+  return dedupeBy(results, (entry) => entry.url);
 }
 
 async function fetchWikidataEntityAliases(entityId) {
