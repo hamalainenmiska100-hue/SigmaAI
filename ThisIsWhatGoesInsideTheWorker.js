@@ -7,21 +7,27 @@
  * Required secret env var:
  *   NVIDIA_API_KEY (or NIM_API_KEY)
  *
- * Optional plain text env var:
+ * Optional env vars:
  *   SYSTEM_INSTRUCTION
+ *   CORS_ALLOW_ORIGIN (default: *)
  */
 
 const NVIDIA_CHAT_COMPLETIONS_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL = 'stepfun-ai/step-3.5-flash';
+const MODEL = 'mistralai/devstral-2-123b-instruct-2512';
+
+const MAX_MESSAGE_CHARS = 16_000;
+const MAX_HISTORY_ITEMS = 40;
+const MAX_IMAGE_URL_CHARS = 2_000_000;
+const UPSTREAM_TIMEOUT_MS = 55_000;
 
 export async function onRequestPost(context) {
   return handleChatRequest(context.request, context.env);
 }
 
-export async function onRequestOptions() {
+export async function onRequestOptions(context) {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders(),
+    headers: corsHeaders(context?.request, context?.env),
   });
 }
 
@@ -32,16 +38,16 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders(),
+        headers: corsHeaders(request, env),
       });
     }
 
     if (url.pathname !== '/chat') {
-      return withCors(json({ error: 'Not found' }, 404));
+      return withCors(json({ error: 'Not found' }, 404), request, env);
     }
 
     if (request.method !== 'POST') {
-      return withCors(json({ error: 'Method not allowed' }, 405));
+      return withCors(json({ error: 'Method not allowed' }, 405), request, env);
     }
 
     return handleChatRequest(request, env);
@@ -49,27 +55,32 @@ export default {
 };
 
 async function handleChatRequest(request, env) {
+  const contentType = (request.headers.get('content-type') ?? '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    return withCors(json({ error: 'Content-Type must be application/json' }, 415), request, env);
+  }
+
   let payload;
   try {
     payload = await request.json();
   } catch {
-    return withCors(json({ error: 'Invalid JSON' }, 400));
+    return withCors(json({ error: 'Invalid JSON' }, 400), request, env);
   }
 
-  const message = String(payload?.message ?? '').trim();
-  const imageData = String(payload?.imageData ?? '').trim();
-  const customInstructions = String(payload?.customInstructions ?? '').trim();
-  const systemInstruction = String(env?.SYSTEM_INSTRUCTION ?? '').trim();
-  const chatHistory = Array.isArray(payload?.chatHistory) ? payload.chatHistory : [];
+  const message = sanitizeText(payload?.message, MAX_MESSAGE_CHARS);
+  const imageData = sanitizeImageUrl(payload?.imageData);
+  const customInstructions = sanitizeText(payload?.customInstructions, 4_000);
+  const systemInstruction = sanitizeText(env?.SYSTEM_INSTRUCTION, 4_000);
+  const chatHistory = Array.isArray(payload?.chatHistory) ? payload.chatHistory.slice(-MAX_HISTORY_ITEMS) : [];
   const stream = payload?.stream !== false;
 
   if (!message && !imageData) {
-    return withCors(json({ error: 'Message or image is required' }, 400));
+    return withCors(json({ error: 'Message or image is required' }, 400), request, env);
   }
 
   const apiKey = String(env?.NVIDIA_API_KEY ?? env?.NIM_API_KEY ?? '').trim();
   if (!apiKey) {
-    return withCors(json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500));
+    return withCors(json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500), request, env);
   }
 
   const messages = [];
@@ -77,9 +88,9 @@ async function handleChatRequest(request, env) {
   if (customInstructions) messages.push({ role: 'system', content: customInstructions });
 
   for (const item of chatHistory) {
-    const role = item?.role === 'assistant' ? 'assistant' : item?.role === 'system' ? 'system' : 'user';
-    const content = String(item?.content ?? '').trim();
-    const itemImage = String(item?.imageData ?? '').trim();
+    const role = item?.role === 'assistant' ? 'assistant' : 'user';
+    const content = sanitizeText(item?.content, MAX_MESSAGE_CHARS);
+    const itemImage = sanitizeImageUrl(item?.imageData);
     if (!content && !itemImage) continue;
 
     if (itemImage && role === 'user') {
@@ -107,6 +118,9 @@ async function handleChatRequest(request, env) {
     messages.push({ role: 'user', content: message });
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort('upstream-timeout'), UPSTREAM_TIMEOUT_MS);
+
   let upstreamResponse;
   try {
     upstreamResponse = await fetch(NVIDIA_CHAT_COMPLETIONS_URL, {
@@ -120,76 +134,117 @@ async function handleChatRequest(request, env) {
         messages,
         stream,
         temperature: 0.2,
-        extra_body: {
-          chat_template_kwargs: {
-            thinking: false,
-          },
-        },
       }),
+      signal: controller.signal,
+      keepalive: true,
     });
   } catch {
-    return withCors(json({ error: 'Upstream provider unreachable' }, 502));
+    clearTimeout(timeout);
+    return withCors(json({ error: 'Upstream provider unreachable' }, 502), request, env);
   }
 
   if (!stream) {
+    clearTimeout(timeout);
+    if (!upstreamResponse.ok) {
+      const details = await safeJson(upstreamResponse);
+      return withCors(json({ error: 'Upstream provider error', details }, 502), request, env);
+    }
+
     const data = await safeJson(upstreamResponse);
     const content = extractTextContent(data);
-    return withCors(json({ type: 'message', content }));
+    return withCors(json({ type: 'message', content }), request, env);
   }
 
   if (!upstreamResponse.ok || !upstreamResponse.body) {
+    clearTimeout(timeout);
     const details = await safeJson(upstreamResponse);
-    return withCors(json({ error: 'Upstream provider error', details }, 502));
+    return withCors(json({ error: 'Upstream provider error', details }, 502), request, env);
   }
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
   const transformed = new ReadableStream({
-    async start(controller) {
-      let buffer = '';
+    async start(streamController) {
       const reader = upstreamResponse.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      let buffer = '';
 
-        const segments = buffer.split('\n');
-        buffer = segments.pop() ?? '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        for (const rawLine of segments) {
-          const line = rawLine.trim();
-          if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
-          if (!payload || payload === '[DONE]') continue;
+          buffer += decoder.decode(value, { stream: true });
 
-          let event;
-          try {
-            event = JSON.parse(payload);
-          } catch {
-            continue;
+          let splitIndex = buffer.indexOf('\n\n');
+          while (splitIndex !== -1) {
+            const rawEvent = buffer.slice(0, splitIndex);
+            buffer = buffer.slice(splitIndex + 2);
+
+            const delta = extractDeltaFromEvent(rawEvent);
+            if (delta) {
+              streamController.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: 'delta', delta })}\n\n`),
+              );
+            }
+
+            if (rawEvent.includes('data: [DONE]')) {
+              streamController.enqueue(encoder.encode('data: [DONE]\n\n'));
+              streamController.close();
+              return;
+            }
+
+            splitIndex = buffer.indexOf('\n\n');
           }
-
-          const delta = extractDelta(event);
-          if (!delta) continue;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'delta', delta })}\n\n`));
         }
-      }
 
-      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-      controller.close();
+        streamController.enqueue(encoder.encode('data: [DONE]\n\n'));
+        streamController.close();
+      } catch {
+        streamController.error(new Error('Streaming interrupted'));
+      } finally {
+        clearTimeout(timeout);
+        reader.releaseLock();
+      }
+    },
+    cancel() {
+      clearTimeout(timeout);
+      controller.abort('client-disconnect');
     },
   });
 
   return new Response(transformed, {
     status: 200,
     headers: {
-      ...corsHeaders(),
+      ...corsHeaders(request, env),
       'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
+      'cache-control': 'no-store, no-transform',
       connection: 'keep-alive',
+      'x-accel-buffering': 'no',
     },
   });
+}
+
+function extractDeltaFromEvent(rawEvent) {
+  const lines = rawEvent.split('\n');
+  let payload = '';
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) continue;
+    const dataPart = line.slice(5).trim();
+    if (!dataPart || dataPart === '[DONE]') continue;
+    payload += dataPart;
+  }
+
+  if (!payload) return '';
+
+  try {
+    const event = JSON.parse(payload);
+    return extractDelta(event);
+  } catch {
+    return '';
+  }
 }
 
 function extractDelta(data) {
@@ -219,6 +274,22 @@ function extractTextContent(data) {
   return '';
 }
 
+function sanitizeText(value, maxChars) {
+  return String(value ?? '')
+    .replace(/\u0000/g, '')
+    .trim()
+    .slice(0, maxChars);
+}
+
+function sanitizeImageUrl(value) {
+  const url = String(value ?? '').trim().slice(0, MAX_IMAGE_URL_CHARS);
+  if (!url) return '';
+
+  if (url.startsWith('data:image/')) return url;
+  if (url.startsWith('https://') || url.startsWith('http://')) return url;
+  return '';
+}
+
 async function safeJson(response) {
   const contentType = response.headers.get('content-type') ?? '';
   try {
@@ -242,9 +313,9 @@ function json(body, status = 200) {
   });
 }
 
-function withCors(response) {
+function withCors(response, request, env) {
   const headers = new Headers(response.headers);
-  const cors = corsHeaders();
+  const cors = corsHeaders(request, env);
   for (const [key, value] of Object.entries(cors)) {
     headers.set(key, value);
   }
@@ -255,10 +326,15 @@ function withCors(response) {
   });
 }
 
-function corsHeaders() {
+function corsHeaders(request, env) {
+  const configured = String(env?.CORS_ALLOW_ORIGIN ?? '*').trim() || '*';
+  const requestOrigin = request?.headers?.get('origin') ?? '';
+  const allowOrigin = configured === '*' ? '*' : configured === requestOrigin ? configured : 'null';
+
   return {
-    'access-control-allow-origin': '*',
+    'access-control-allow-origin': allowOrigin,
     'access-control-allow-methods': 'POST, OPTIONS',
     'access-control-allow-headers': 'Content-Type, Authorization',
+    vary: 'Origin',
   };
 }
