@@ -85,7 +85,7 @@ class _MessageInputState extends State<MessageInput> {
                   ? Container(
                       key: ValueKey('phase-${widget.phase.name}'),
                       margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
                         color: colors.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(999),
@@ -94,7 +94,7 @@ class _MessageInputState extends State<MessageInput> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(999),
                         child: LinearProgressIndicator(
-                          minHeight: 8,
+                          minHeight: 4,
                           color: colors.primary,
                           backgroundColor: colors.primaryContainer.withValues(alpha: 0.5),
                         ),
