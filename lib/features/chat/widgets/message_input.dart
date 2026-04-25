@@ -53,17 +53,6 @@ class _MessageInputState extends State<MessageInput> {
     });
   }
 
-  String _phaseText() {
-    switch (widget.phase) {
-      case AiProgressPhase.searching:
-        return 'Searching…';
-      case AiProgressPhase.responding:
-        return 'Responding…';
-      case AiProgressPhase.thinking:
-        return 'Thinking…';
-    }
-  }
-
   @override
   void dispose() {
     controller.dispose();
@@ -96,31 +85,19 @@ class _MessageInputState extends State<MessageInput> {
                   ? Container(
                       key: ValueKey('phase-${widget.phase.name}'),
                       margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       decoration: BoxDecoration(
                         color: colors.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.4)),
                       ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: colors.primary,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            _phaseText(),
-                            style: TextStyle(
-                              color: colors.onSurface,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          minHeight: 8,
+                          color: colors.primary,
+                          backgroundColor: colors.primaryContainer.withValues(alpha: 0.5),
+                        ),
                       ),
                     )
                   : const SizedBox.shrink(key: ValueKey('idle-indicator')),
