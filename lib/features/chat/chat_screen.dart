@@ -37,6 +37,8 @@ class _ChatScreenState extends State<ChatScreen> {
   AiProgressPhase _progressPhase = AiProgressPhase.thinking;
   StreamSubscription<AiStreamEvent>? _activeStream;
   Completer<void>? _generationCompleter;
+  int _generationCounter = 0;
+  int? _activeGenerationId;
 
   @override
   void initState() {
@@ -88,7 +90,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     final assistantId = _uuid.v4();
-    var hasAssistantMessage = false;
+    final generationId = ++_generationCounter;
+    _activeGenerationId = generationId;
+    var assistantIndex = -1;
 
     setState(() {
       _messages = [..._messages, userMessage];
@@ -100,14 +104,52 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom(jump: true);
 
     final settings = await _settingsService.loadSettings();
+    if (_activeGenerationId != generationId || !_isGenerating) {
+      return;
+    }
+
     final languageTag = _languageTag(settings.language);
     final systemMode = settings.tone.name;
 
     try {
       var streamed = '';
+      final pending = StringBuffer();
+      Timer? flushTimer;
       final done = Completer<void>();
       _generationCompleter = done;
       final requestHistory = List<ChatMessage>.from(_messages);
+
+      void flushPendingDelta() {
+        if (pending.isEmpty || !mounted || _activeGenerationId != generationId) return;
+        streamed += pending.toString();
+        pending.clear();
+        setState(() {
+          _progressPhase = AiProgressPhase.responding;
+          if (assistantIndex < 0) {
+            assistantIndex = _messages.length;
+            _messages = [
+              ..._messages,
+              ChatMessage(
+                id: assistantId,
+                role: 'assistant',
+                content: streamed,
+                createdAt: DateTime.now(),
+              ),
+            ];
+          } else if (assistantIndex < _messages.length) {
+            final next = List<ChatMessage>.from(_messages);
+            final existing = next[assistantIndex];
+            next[assistantIndex] = ChatMessage(
+              id: existing.id,
+              role: existing.role,
+              content: streamed,
+              createdAt: existing.createdAt,
+            );
+            _messages = next;
+          }
+        });
+        _scrollToBottom();
+      }
 
       _activeStream = _aiService
           .streamMessage(
@@ -119,7 +161,7 @@ class _ChatScreenState extends State<ChatScreen> {
           )
           .listen(
         (event) {
-          if (!mounted) return;
+          if (!mounted || _activeGenerationId != generationId) return;
 
           if (event.phase != null) {
             setState(() {
@@ -128,36 +170,25 @@ class _ChatScreenState extends State<ChatScreen> {
             return;
           }
 
-          if (event.delta != null && event.delta!.isNotEmpty) {
-            streamed += event.delta!;
-            setState(() {
-              _progressPhase = AiProgressPhase.responding;
-              if (!hasAssistantMessage) {
-                hasAssistantMessage = true;
-                _messages = [
-                  ..._messages,
-                  ChatMessage(
-                    id: assistantId,
-                    role: 'assistant',
-                    content: streamed,
-                    createdAt: DateTime.now(),
-                  ),
-                ];
-              } else {
-                _messages = _messages
-                    .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
-                    .toList();
-              }
+          final delta = event.delta;
+          if (delta != null && delta.isNotEmpty) {
+            pending.write(delta);
+            flushTimer ??= Timer(const Duration(milliseconds: 16), () {
+              flushTimer = null;
+              flushPendingDelta();
             });
-            _scrollToBottom();
           }
         },
         onError: (Object error, StackTrace stackTrace) {
+          flushTimer?.cancel();
+          flushPendingDelta();
           if (!done.isCompleted) {
             done.completeError(error, stackTrace);
           }
         },
         onDone: () {
+          flushTimer?.cancel();
+          flushPendingDelta();
           if (!done.isCompleted) {
             done.complete();
           }
@@ -168,11 +199,11 @@ class _ChatScreenState extends State<ChatScreen> {
       await done.future;
 
       await _persistCurrentThread(_messages);
-      if (!mounted) return;
+      if (!mounted || _activeGenerationId != generationId) return;
       setState(() => _isGenerating = false);
     } on AiException catch (e) {
       debugPrint('AiException: ${e.displayMessage}');
-      if (!mounted) return;
+      if (!mounted || _activeGenerationId != generationId) return;
       setState(() {
         _isGenerating = false;
       });
@@ -180,28 +211,34 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e, stackTrace) {
       debugPrint('Unhandled error while sending message: $e');
       debugPrint('$stackTrace');
-      if (!mounted) return;
+      if (!mounted || _activeGenerationId != generationId) return;
       setState(() {
         _isGenerating = false;
       });
     } finally {
       await _activeStream?.cancel();
-      _activeStream = null;
-      _generationCompleter = null;
+      if (_activeGenerationId == generationId) {
+        _activeStream = null;
+        _generationCompleter = null;
+        _activeGenerationId = null;
+      }
     }
   }
 
   Future<void> _stopGeneration() async {
     if (!_isGenerating) return;
+    _activeGenerationId = null;
     _aiService.cancelActiveRequest();
     await _activeStream?.cancel();
     _activeStream = null;
     if (_generationCompleter != null && !_generationCompleter!.isCompleted) {
       _generationCompleter!.complete();
     }
+    _generationCompleter = null;
     if (!mounted) return;
     setState(() {
       _isGenerating = false;
+      _progressPhase = AiProgressPhase.thinking;
     });
     await _persistCurrentThread(_messages);
   }
