@@ -13,6 +13,7 @@
  *   SYSTEM_INSTRUCTION_UNHINGED
  *   SYSTEM_INSTRUCTION_SPICY
  *   SUMMARY_ANALYZER_SYSTEM_PROMPT
+ *   NVIDIA_API_KEY2 (orchestrator query-planning model key; falls back to NVIDIA_API_KEY)
  *   CORS_ALLOW_ORIGIN (default: *)
  */
 
@@ -27,6 +28,7 @@ const WIKIDATA_ENTITY_DATA_BASE_URL = 'https://www.wikidata.org/wiki/Special:Ent
 const GDELT_DOC_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
 const SEARCH_QUERY_SYSTEM_PROMPT = `You generate concise web search queries for Wikipedia, Wikidata, and GDELT news.\nReturn ONLY valid JSON with this exact shape:\n{"wikipedia": ["query 1", "query 2"], "wikidata": ["query 1", "query 2"], "gdelt": ["query 1", "query 2"]}\nRules:\n- Keep each query directly relevant to the user request.\n- Use 1 to 3 queries per array.\n- Prefer entities, facts, events, places, people, products, laws, standards, and dates when relevant.\n- Keep queries short and specific.\n- GDELT queries should be optimized for recent news/event discovery.\n- No markdown, no prose, no explanations.`;
 const ORCHESTRATOR_NEWS_REGEX = /\b(latest|today|current|recent|newest|update|updated|as of|right now|breaking|news|price|stock|score|weather|traffic|election|release date|availability)\b/i;
+const ORCHESTRATOR_SEARCH_INTENT_REGEX = /\b(search|look up|lookup|find|research|who is|what is|tell me about|information on|info on)\b/i;
 const ORCHESTRATOR_SIMPLE_REGEX = /^(hi|hello|hey|thanks|thank you|what can you do|who are you|tell me a joke|good morning|good night)[!.?\s]*$/i;
 const WIKIPEDIA_LATEST_HINT_REGEX = /\b(latest|today|current|recent|newest|update|updated|as of|right now|this week|this month|this year)\b/i;
 
@@ -148,6 +150,7 @@ async function handleChatRequest(request, env, waitUntil) {
   if (!apiKey) {
     return withCors(json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500), request, env);
   }
+  const orchestratorApiKey = String(env?.NVIDIA_API_KEY2 ?? '').trim() || apiKey;
 
   const messages = [];
   const firebaseSession = await getFirebaseSession();
@@ -213,6 +216,7 @@ async function handleChatRequest(request, env, waitUntil) {
 
   emitProgress('thinking');
   const research = await buildKnowledgeContext({
+    apiKey: orchestratorApiKey,
     userMessage: taggedMessage,
     chatHistory,
     emitProgress,
@@ -443,8 +447,10 @@ function createOrchestratorPlan({ userMessage, chatHistory }) {
   const combined = [text, ...recentUserTurns].join(' ');
 
   const latestHint = ORCHESTRATOR_NEWS_REGEX.test(combined) || WIKIPEDIA_LATEST_HINT_REGEX.test(combined);
+  const explicitSearchIntent = ORCHESTRATOR_SEARCH_INTENT_REGEX.test(combined);
+  const entityLikeLookup = /^[\w\s'"’.-]{2,80}$/.test(text) && text.trim().split(/\s+/).length <= 8;
   const longQuestion = combined.length > 160 || combined.includes('?');
-  const shouldSearch = latestHint || longQuestion;
+  const shouldSearch = latestHint || longQuestion || explicitSearchIntent || entityLikeLookup;
 
   if (!shouldSearch) {
     return { shouldSearch: false, wikipedia: [], wikidata: [], gdelt: [] };
@@ -458,7 +464,7 @@ function createOrchestratorPlan({ userMessage, chatHistory }) {
   return { shouldSearch: true, wikipedia, wikidata, gdelt };
 }
 
-async function buildKnowledgeContext({ userMessage, chatHistory, emitProgress }) {
+async function buildKnowledgeContext({ apiKey, userMessage, chatHistory, emitProgress }) {
   if (!userMessage) return { context: '', sources: [] };
 
   const queryPlan = createOrchestratorPlan({ userMessage, chatHistory });
@@ -466,12 +472,21 @@ async function buildKnowledgeContext({ userMessage, chatHistory, emitProgress })
     return { context: '', sources: [] };
   }
 
+  const generatedPlan = apiKey
+    ? await generateWikimediaQueries({ apiKey, userMessage, chatHistory })
+    : { wikipedia: [], wikidata: [], gdelt: [] };
+  const mergedPlan = {
+    wikipedia: dedupeBy([...generatedPlan.wikipedia, ...queryPlan.wikipedia], (item) => item.toLowerCase()).slice(0, 3),
+    wikidata: dedupeBy([...generatedPlan.wikidata, ...queryPlan.wikidata], (item) => item.toLowerCase()).slice(0, 3),
+    gdelt: dedupeBy([...generatedPlan.gdelt, ...queryPlan.gdelt], (item) => item.toLowerCase()).slice(0, 3),
+  };
+
   emitProgress?.('searching');
 
   const [wikipediaResults, wikidataResults, gdeltResults] = await Promise.all([
-    queryPlan.wikipedia.length ? searchWikipedia(queryPlan.wikipedia) : Promise.resolve([]),
-    queryPlan.wikidata.length ? searchWikidata(queryPlan.wikidata) : Promise.resolve([]),
-    queryPlan.gdelt.length ? searchGdelt(queryPlan.gdelt) : Promise.resolve([]),
+    mergedPlan.wikipedia.length ? searchWikipedia(mergedPlan.wikipedia) : Promise.resolve([]),
+    mergedPlan.wikidata.length ? searchWikidata(mergedPlan.wikidata) : Promise.resolve([]),
+    mergedPlan.gdelt.length ? searchGdelt(mergedPlan.gdelt) : Promise.resolve([]),
   ]);
 
   if (!wikipediaResults.length && !wikidataResults.length && !gdeltResults.length) {
