@@ -39,8 +39,19 @@ class AiService {
     required String systemMode,
     List<String> imageData = const [],
   }) async* {
-    final trimmedHistory = history
-        .take(history.length > 16 ? 16 : history.length)
+    final normalizedHistory = history
+        .where((e) => (e.role == 'user' || e.role == 'assistant') && e.content.trim().isNotEmpty)
+        .toList();
+
+    if (normalizedHistory.isNotEmpty &&
+        normalizedHistory.last.role == 'user' &&
+        normalizedHistory.last.content.trim() == message.trim()) {
+      normalizedHistory.removeLast();
+    }
+
+    final start = normalizedHistory.length > 16 ? normalizedHistory.length - 16 : 0;
+    final trimmedHistory = normalizedHistory
+        .skip(start)
         .map(
           (e) => {
             'role': e.role,
