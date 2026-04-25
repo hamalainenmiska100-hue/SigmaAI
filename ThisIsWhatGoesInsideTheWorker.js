@@ -67,39 +67,56 @@ let firebaseAuthState = {
 };
 const modeSummaryCache = new Map();
 
-export async function onRequestPost(context) {
+async function onRequestPost(context) {
   return handleChatRequest(context.request, context.env, context?.waitUntil?.bind(context));
 }
 
-export async function onRequestOptions(context) {
+async function onRequestOptions(context) {
   return new Response(null, {
     status: 204,
     headers: corsHeaders(context?.request, context?.env),
   });
 }
 
-export default {
-  async fetch(request, env, executionContext) {
-    const url = new URL(request.url);
+async function handleFetch(request, env, executionContext) {
+  const runtimeEnv = normalizeEnv(env);
+  const url = new URL(request.url);
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders(request, env),
-      });
-    }
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(request, runtimeEnv),
+    });
+  }
 
-    if (url.pathname !== '/chat') {
-      return withCors(json({ error: 'Not found' }, 404), request, env);
-    }
+  if (url.pathname !== '/chat') {
+    return withCors(json({ error: 'Not found' }, 404), request, runtimeEnv);
+  }
 
-    if (request.method !== 'POST') {
-      return withCors(json({ error: 'Method not allowed' }, 405), request, env);
-    }
+  if (request.method !== 'POST') {
+    return withCors(json({ error: 'Method not allowed' }, 405), request, runtimeEnv);
+  }
 
-    return handleChatRequest(request, env, executionContext?.waitUntil?.bind(executionContext));
-  },
-};
+  return handleChatRequest(request, runtimeEnv, executionContext?.waitUntil?.bind(executionContext));
+}
+
+if (typeof addEventListener === 'function') {
+  addEventListener('fetch', (event) => {
+    event.respondWith(handleFetch(event.request, globalThis, event));
+  });
+}
+
+function normalizeEnv(env) {
+  if (env && typeof env === 'object') return env;
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        return globalThis?.[prop];
+      },
+    },
+  );
+}
 
 async function handleChatRequest(request, env, waitUntil) {
   const contentType = (request.headers.get('content-type') ?? '').toLowerCase();
@@ -480,16 +497,13 @@ async function buildKnowledgeContext({ userMessage, chatHistory, emitProgress })
 
   const sections = [`Live Wikimedia context generated at ${new Date().toISOString()}:`];
   if (wikiLines.length) {
-    sections.push(['Wikipedia results (official API):', ...wikiLines].join('
-'));
+    sections.push(['Wikipedia results (official API):', ...wikiLines].join('\n'));
   }
   if (wikidataLines.length) {
-    sections.push(['Wikidata results (official API):', ...wikidataLines].join('
-'));
+    sections.push(['Wikidata results (official API):', ...wikidataLines].join('\n'));
   }
   if (gdeltLines.length) {
-    sections.push(['GDELT recent news results (official API):', ...gdeltLines].join('
-'));
+    sections.push(['GDELT recent news results (official API):', ...gdeltLines].join('\n'));
   }
 
   const sources = dedupeBy(
@@ -502,9 +516,7 @@ async function buildKnowledgeContext({ userMessage, chatHistory, emitProgress })
   ).slice(0, 6);
 
   return {
-    context: sections.join('
-
-'),
+    context: sections.join('\n\n'),
     sources,
   };
 }
