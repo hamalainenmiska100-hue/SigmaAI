@@ -1,9 +1,14 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+
+import '../services/image_attachment_service.dart';
 
 class MessageInput extends StatefulWidget {
   final bool canSend;
   final bool isGenerating;
-  final Future<void> Function(String text) onSend;
+  final Future<void> Function(String text, {List<String> imageData}) onSend;
   final VoidCallback onStop;
 
   const MessageInput({
@@ -20,16 +25,29 @@ class MessageInput extends StatefulWidget {
 
 class _MessageInputState extends State<MessageInput> {
   final controller = TextEditingController();
+  final _imageAttachmentService = ImageAttachmentService();
+  List<String> _attachedImages = [];
 
   Future<void> submit() async {
     final text = controller.text.trim();
+    final imageData = _attachedImages.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
-    if (text.isEmpty || !widget.canSend) {
+    if ((text.isEmpty && imageData.isEmpty) || !widget.canSend) {
       return;
     }
 
     controller.clear();
-    await widget.onSend(text);
+    setState(() => _attachedImages = []);
+    await widget.onSend(text, imageData: imageData);
+  }
+
+  Future<void> _pickImageFromDevice() async {
+    if (_attachedImages.length >= 3) return;
+    final picked = await _imageAttachmentService.pickCompressedImageDataUri();
+    if (!mounted || picked == null) return;
+    setState(() {
+      _attachedImages = [..._attachedImages, picked].take(3).toList();
+    });
   }
 
   @override
@@ -75,6 +93,13 @@ class _MessageInputState extends State<MessageInput> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                IconButton(
+                  onPressed: widget.canSend ? _pickImageFromDevice : null,
+                  tooltip: 'Attach image',
+                  icon: Icon(
+                    _attachedImages.isEmpty ? Icons.image_outlined : Icons.image,
+                  ),
+                ),
                 Expanded(
                   child: TextField(
                     controller: controller,
@@ -83,7 +108,9 @@ class _MessageInputState extends State<MessageInput> {
                     maxLines: 5,
                     textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
-                      hintText: widget.canSend ? 'Message Sigma...' : 'Sigma is responding...',
+                      hintText: widget.canSend
+                          ? (_attachedImages.isEmpty ? 'Message Sigma...' : 'Message about attached images...')
+                          : 'Sigma is responding...',
                     ),
                   ),
                 ),
@@ -107,9 +134,74 @@ class _MessageInputState extends State<MessageInput> {
                 ),
               ],
             ),
+            if (_attachedImages.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 70,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _attachedImages.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final image = _attachedImages[index];
+                    final bytes = imageAttachmentBytes(image);
+                    return Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: bytes.isEmpty
+                              ? Container(
+                                  width: 70,
+                                  height: 70,
+                                  color: colors.surfaceContainerHighest,
+                                  child: const Icon(Icons.broken_image_outlined),
+                                )
+                              : Image.memory(
+                                  bytes,
+                                  width: 70,
+                                  height: 70,
+                                  fit: BoxFit.cover,
+                                ),
+                        ),
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                final next = [..._attachedImages];
+                                next.removeAt(index);
+                                _attachedImages = next;
+                              });
+                            },
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close, size: 14, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+}
+
+Uint8List imageAttachmentBytes(String dataUri) {
+  final comma = dataUri.indexOf(',');
+  if (comma < 0 || comma + 1 >= dataUri.length) return Uint8List(0);
+  try {
+    return base64Decode(dataUri.substring(comma + 1));
+  } catch (_) {
+    return Uint8List(0);
   }
 }

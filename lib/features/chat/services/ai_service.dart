@@ -7,16 +7,21 @@ import '../../../core/config/app_config.dart';
 import '../models/chat_message.dart';
 
 class AiService {
-  final http.Client _client;
+  http.Client _client;
 
   AiService({http.Client? client}) : _client = client ?? http.Client();
+
+  void cancelActiveRequest() {
+    _client.close();
+    _client = http.Client();
+  }
 
   Stream<String> streamMessage({
     required String message,
     required List<ChatMessage> history,
     required String languageTag,
     required String systemMode,
-    String? imageData,
+    List<String> imageData = const [],
   }) async* {
     final trimmedHistory = history
         .take(history.length > 16 ? 16 : history.length)
@@ -24,7 +29,6 @@ class AiService {
           (e) => {
             'role': e.role,
             'content': e.content,
-            if (e.imageData != null) 'imageData': e.imageData,
           },
         )
         .toList();
@@ -39,7 +43,7 @@ class AiService {
         'languageTag': languageTag,
         'systemMode': systemMode,
         'chatHistory': trimmedHistory,
-        if (imageData != null) 'imageData': imageData,
+        if (imageData.isNotEmpty) 'imageData': imageData,
         'stream': true,
       });
 
