@@ -32,6 +32,30 @@ This MVP stores data locally with `shared_preferences`:
 - Per-thread messages key: `sigma_chat_messages_<threadId>`
 - Custom instructions key: `sigmaai_custom_instructions`
 
+
+## Cloudflare Pages deployment (GitHub Actions)
+
+This repo deploys Flutter web to Cloudflare Pages via:
+
+`/.github/workflows/deploy-pages.yml`
+
+Configure these in your GitHub repository before running the workflow:
+
+1. **Secret** `CF_TOKEN`
+   - Cloudflare API token with **Account → Cloudflare Pages: Edit** permission.
+2. **Secret** `CF_ACCOUNT_ID`
+   - Your Cloudflare account ID.
+3. **Variable** `CF_PAGES_PROJECT`
+   - Exact Cloudflare Pages project name (case-sensitive).
+
+GitHub path: **Settings → Secrets and variables → Actions**
+
+Then trigger deployment by:
+- pushing to `main`, or
+- running **Actions → Build and Deploy Flutter Web to Cloudflare Pages → Run workflow**.
+
+If the workflow fails immediately with a "Missing ..." message, one of the required values above is not set correctly.
+
 ## Notes
 
 - Chat supports text streaming + image inputs via a Cloudflare Worker proxy.
