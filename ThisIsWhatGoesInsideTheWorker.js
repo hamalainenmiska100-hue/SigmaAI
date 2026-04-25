@@ -123,7 +123,12 @@ async function handleChatRequest(request, env) {
   if (webContext) {
     messages.push({
       role: 'system',
-      content: `Use this live research context from Wikimedia sources to improve factuality and freshness. If there is a conflict with old memory, prefer this context.\n\n${webContext}`,
+      content:
+        'You have live web research context from official Wikipedia and Wikidata APIs in this conversation. Use it when relevant, prefer it over stale memory, and do not claim you lack web context when this data is present.',
+    });
+    messages.push({
+      role: 'system',
+      content: webContext,
     });
   }
 
@@ -264,10 +269,11 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
     return '';
   }
 
-  const [wikipediaResults, wikidataResults] = await Promise.all([
-    searchWikipedia(queryPlan.wikipedia),
-    searchWikidata(queryPlan.wikidata),
-  ]);
+  const wikipediaResults = await searchWikipedia(queryPlan.wikipedia);
+  const wikidataQueries = queryPlan.wikidata.length
+    ? queryPlan.wikidata
+    : wikipediaResults.map((item) => item.title).slice(0, 3);
+  const wikidataResults = await searchWikidata(wikidataQueries);
 
   if (!wikipediaResults.length && !wikidataResults.length) {
     return '';
@@ -284,12 +290,12 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
     return `${index + 1}. ${item.label} (${item.id})${description}${aliases} (URL: ${item.url})`;
   });
 
-  const sections = [];
+  const sections = [`Live Wikimedia context generated at ${new Date().toISOString()}:`];
   if (wikiLines.length) {
-    sections.push(['Wikipedia hits:', ...wikiLines].join('\n'));
+    sections.push(['Wikipedia results (official API):', ...wikiLines].join('\n'));
   }
   if (wikidataLines.length) {
-    sections.push(['Wikidata entities:', ...wikidataLines].join('\n'));
+    sections.push(['Wikidata results (official API):', ...wikidataLines].join('\n'));
   }
 
   return sections.join('\n\n');
