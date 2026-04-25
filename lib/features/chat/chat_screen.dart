@@ -33,13 +33,25 @@ class _ChatScreenState extends State<ChatScreen> {
   List<ChatThread> _threads = [];
   ChatThread? _activeThread;
   bool _isGenerating = false;
-  StreamSubscription<String>? _activeStream;
+  bool _shouldAutoScroll = true;
+  AiProgressPhase _progressPhase = AiProgressPhase.thinking;
+  StreamSubscription<AiStreamEvent>? _activeStream;
   Completer<void>? _generationCompleter;
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_handleScrollChanged);
     _loadInitialData();
+  }
+
+  void _handleScrollChanged() {
+    if (!_scrollController.hasClients) return;
+    final distanceToBottom = _scrollController.position.maxScrollExtent - _scrollController.offset;
+    final nextShouldAutoScroll = distanceToBottom <= 120;
+    if (nextShouldAutoScroll != _shouldAutoScroll) {
+      setState(() => _shouldAutoScroll = nextShouldAutoScroll);
+    }
   }
 
   Future<void> _loadInitialData() async {
@@ -79,16 +91,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final placeholder = ChatMessage(
       id: assistantId,
       role: 'assistant',
-      content: '',
+      content: 'Thinking…',
       createdAt: DateTime.now(),
     );
 
     setState(() {
       _messages = [..._messages, userMessage, placeholder];
       _isGenerating = true;
+      _progressPhase = AiProgressPhase.thinking;
+      _shouldAutoScroll = true;
     });
     await _persistCurrentThread(_messages, titleHint: trimmed.isNotEmpty ? trimmed : 'Image message');
-    _scrollToBottom();
+    _scrollToBottom(jump: true);
 
     final settings = await _settingsService.loadSettings();
     final languageTag = _languageTag(settings.language);
@@ -109,15 +123,40 @@ class _ChatScreenState extends State<ChatScreen> {
             imageData: normalizedImageData,
           )
           .listen(
-        (delta) {
-          streamed += delta;
+        (event) {
           if (!mounted) return;
-          setState(() {
-            _messages = _messages
-                .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
-                .toList();
-          });
-          _scrollToBottom();
+
+          if (event.phase != null) {
+            setState(() {
+              _progressPhase = event.phase!;
+              if (streamed.isEmpty) {
+                _messages = _messages
+                    .map(
+                      (m) => m.id == assistantId
+                          ? ChatMessage(
+                              id: m.id,
+                              role: m.role,
+                              content: _phaseLabel(event.phase!),
+                              createdAt: m.createdAt,
+                            )
+                          : m,
+                    )
+                    .toList();
+              }
+            });
+            return;
+          }
+
+          if (event.delta != null && event.delta!.isNotEmpty) {
+            streamed += event.delta!;
+            setState(() {
+              _progressPhase = AiProgressPhase.responding;
+              _messages = _messages
+                  .map((m) => m.id == assistantId ? ChatMessage(id: m.id, role: m.role, content: streamed, createdAt: m.createdAt) : m)
+                  .toList();
+            });
+            _scrollToBottom();
+          }
         },
         onError: (Object error, StackTrace stackTrace) {
           if (!done.isCompleted) {
@@ -231,6 +270,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _scrollToBottom({bool jump = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
+      if (!jump && !_shouldAutoScroll) return;
       if (jump) {
         _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       } else {
@@ -243,11 +283,24 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  String _phaseLabel(AiProgressPhase phase) {
+    switch (phase) {
+      case AiProgressPhase.searching:
+        return 'Searching…';
+      case AiProgressPhase.responding:
+        return 'Responding…';
+      case AiProgressPhase.thinking:
+        return 'Thinking…';
+    }
+  }
+
   @override
   void dispose() {
     _activeStream?.cancel();
     _aiService.cancelActiveRequest();
-    _scrollController.dispose();
+    _scrollController
+      ..removeListener(_handleScrollChanged)
+      ..dispose();
     super.dispose();
   }
 
@@ -303,6 +356,7 @@ class _ChatScreenState extends State<ChatScreen> {
             onSend: _sendMessage,
             isGenerating: _isGenerating,
             onStop: _stopGeneration,
+            phase: _progressPhase,
           ),
         ],
       ),

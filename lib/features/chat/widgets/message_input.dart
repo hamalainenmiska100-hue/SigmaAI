@@ -3,11 +3,13 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../services/ai_service.dart';
 import '../services/image_attachment_service.dart';
 
 class MessageInput extends StatefulWidget {
   final bool canSend;
   final bool isGenerating;
+  final AiProgressPhase phase;
   final Future<void> Function(String text, {List<String> imageData}) onSend;
   final VoidCallback onStop;
 
@@ -15,6 +17,7 @@ class MessageInput extends StatefulWidget {
     super.key,
     required this.canSend,
     required this.isGenerating,
+    required this.phase,
     required this.onSend,
     required this.onStop,
   });
@@ -50,6 +53,17 @@ class _MessageInputState extends State<MessageInput> {
     });
   }
 
+  String _phaseText() {
+    switch (widget.phase) {
+      case AiProgressPhase.searching:
+        return 'Searching…';
+      case AiProgressPhase.responding:
+        return 'Responding…';
+      case AiProgressPhase.thinking:
+        return 'Thinking…';
+    }
+  }
+
   @override
   void dispose() {
     controller.dispose();
@@ -71,21 +85,42 @@ class _MessageInputState extends State<MessageInput> {
           mainAxisSize: MainAxisSize.min,
           children: [
             AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              switchInCurve: Curves.easeOutCubic,
+              duration: const Duration(milliseconds: 300),
+              switchInCurve: Curves.easeOutBack,
               switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
+              transitionBuilder: (child, animation) {
+                final offset = Tween<Offset>(begin: const Offset(0, 0.15), end: Offset.zero).animate(animation);
+                return SlideTransition(position: offset, child: FadeTransition(opacity: animation, child: child));
+              },
               child: widget.isGenerating
-                  ? Padding(
-                      key: const ValueKey('generating-indicator'),
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: ClipRRect(
+                  ? Container(
+                      key: ValueKey('phase-${widget.phase.name}'),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: colors.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(999),
-                        child: LinearProgressIndicator(
-                          minHeight: 4,
-                          color: colors.primary,
-                          backgroundColor: colors.surfaceContainerHighest,
-                        ),
+                        border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: colors.primary,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            _phaseText(),
+                            style: TextStyle(
+                              color: colors.onSurface,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     )
                   : const SizedBox.shrink(key: ValueKey('idle-indicator')),
