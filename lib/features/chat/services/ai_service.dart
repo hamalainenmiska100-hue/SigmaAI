@@ -6,6 +6,22 @@ import 'package:http/http.dart' as http;
 import '../../../core/config/app_config.dart';
 import '../models/chat_message.dart';
 
+enum AiProgressPhase { thinking, searching, responding }
+
+class AiStreamEvent {
+  final String? delta;
+  final AiProgressPhase? phase;
+  final List<String>? sources;
+
+  const AiStreamEvent._({this.delta, this.phase, this.sources});
+
+  factory AiStreamEvent.delta(String delta) => AiStreamEvent._(delta: delta);
+
+  factory AiStreamEvent.phase(AiProgressPhase phase) => AiStreamEvent._(phase: phase);
+
+  factory AiStreamEvent.sources(List<String> sources) => AiStreamEvent._(sources: sources);
+}
+
 class AiService {
   http.Client _client;
 
@@ -16,7 +32,7 @@ class AiService {
     _client = http.Client();
   }
 
-  Stream<String> streamMessage({
+  Stream<AiStreamEvent> streamMessage({
     required String message,
     required List<ChatMessage> history,
     required String languageTag,
@@ -68,7 +84,10 @@ class AiService {
     if (contentType.contains('application/json')) {
       final body = await response.stream.bytesToString();
       final decoded = jsonDecode(body) as Map<String, dynamic>;
-      yield (decoded['content'] ?? '').toString();
+      final content = (decoded['content'] ?? '').toString();
+      if (content.isNotEmpty) {
+        yield AiStreamEvent.delta(content);
+      }
       return;
     }
 
@@ -83,8 +102,37 @@ class AiService {
       final map = jsonDecode(payload) as Map<String, dynamic>;
       final type = map['type'];
       if (type == 'delta') {
-        yield (map['delta'] ?? '').toString();
+        final delta = (map['delta'] ?? '').toString();
+        if (delta.isNotEmpty) {
+          yield AiStreamEvent.delta(delta);
+        }
+      } else if (type == 'status') {
+        final phase = _phaseFromString((map['phase'] ?? '').toString());
+        if (phase != null) {
+          yield AiStreamEvent.phase(phase);
+        }
+      } else if (type == 'sources') {
+        final values = map['sources'];
+        if (values is List) {
+          final sources = values.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+          if (sources.isNotEmpty) {
+            yield AiStreamEvent.sources(sources);
+          }
+        }
       }
+    }
+  }
+
+  AiProgressPhase? _phaseFromString(String value) {
+    switch (value) {
+      case 'thinking':
+        return AiProgressPhase.thinking;
+      case 'searching':
+        return AiProgressPhase.searching;
+      case 'responding':
+        return AiProgressPhase.responding;
+      default:
+        return null;
     }
   }
 }
