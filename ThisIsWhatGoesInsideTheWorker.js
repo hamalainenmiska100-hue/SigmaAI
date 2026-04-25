@@ -16,12 +16,16 @@
  */
 
 const NVIDIA_CHAT_COMPLETIONS_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
+const GEMINI_SUMMARY_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent';
 const MODEL = 'mistralai/devstral-2-123b-instruct-2512';
+const IMAGE_SUMMARY_PROMPT = 'analyze this image and give me an detailed summary of it';
 
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_HISTORY_ITEMS = 40;
 const MAX_IMAGE_URL_CHARS = 2_000_000;
 const UPSTREAM_TIMEOUT_MS = 55_000;
+const GEMINI_TIMEOUT_MS = 20_000;
+const MAX_GEMINI_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export async function onRequestPost(context) {
   return handleChatRequest(context.request, context.env);
@@ -86,6 +90,8 @@ async function handleChatRequest(request, env) {
   if (!apiKey) {
     return withCors(json({ error: 'Server misconfigured: missing NVIDIA_API_KEY' }, 500), request, env);
   }
+  const geminiApiKey = String(env?.AISTUDIO_API_KEY ?? '').trim();
+  const imageSummaryCache = new Map();
 
   const messages = [];
   if (selectedInstruction) messages.push({ role: 'system', content: selectedInstruction });
@@ -97,25 +103,35 @@ async function handleChatRequest(request, env) {
     if (!content && !itemImage) continue;
 
     if (itemImage && role === 'user') {
-      messages.push({
-        role,
-        content: [
-          ...(content ? [{ type: 'text', text: content }] : []),
-          { type: 'image_url', image_url: { url: itemImage } },
-        ],
+      const imageSummary = await summarizeImageForNvidia({
+        imageUrl: itemImage,
+        geminiApiKey,
+        cache: imageSummaryCache,
       });
+      const combinedText = [content, imageSummary ? `Image summary:\n${imageSummary}` : '']
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
+      messages.push({ role, content: combinedText || content || 'Image shared by user.' });
     } else {
       messages.push({ role, content });
     }
   }
 
   if (imageData) {
+    const imageSummary = await summarizeImageForNvidia({
+      imageUrl: imageData,
+      geminiApiKey,
+      cache: imageSummaryCache,
+    });
+    const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
+    const combinedText = [taggedMessage, imageSummary ? `Image summary:\n${imageSummary}` : '']
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
     messages.push({
       role: 'user',
-      content: [
-        ...([message, languageTag].filter(Boolean).join(' ').trim() ? [{ type: 'text', text: [message, languageTag].filter(Boolean).join(' ').trim() }] : []),
-        { type: 'image_url', image_url: { url: imageData } },
-      ],
+      content: combinedText || taggedMessage || 'Image shared by user.',
     });
   } else {
     const taggedMessage = [message, languageTag].filter(Boolean).join(' ').trim();
@@ -227,6 +243,117 @@ async function handleChatRequest(request, env) {
       'x-accel-buffering': 'no',
     },
   });
+}
+
+async function summarizeImageForNvidia({ imageUrl, geminiApiKey, cache }) {
+  if (!imageUrl) return '';
+  if (cache?.has(imageUrl)) return cache.get(imageUrl) ?? '';
+  if (!geminiApiKey) {
+    cache?.set(imageUrl, '');
+    return '';
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort('gemini-timeout'), GEMINI_TIMEOUT_MS);
+
+  try {
+    const imagePart = await buildGeminiImagePart(imageUrl, controller.signal);
+    if (!imagePart) {
+      cache?.set(imageUrl, '');
+      return '';
+    }
+
+    const response = await fetch(`${GEMINI_SUMMARY_URL}?key=${encodeURIComponent(geminiApiKey)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: IMAGE_SUMMARY_PROMPT },
+              imagePart,
+            ],
+          },
+        ],
+      }),
+      signal: controller.signal,
+      keepalive: true,
+    });
+
+    if (!response.ok) {
+      cache?.set(imageUrl, '');
+      return '';
+    }
+
+    const data = await safeJson(response);
+    const text = extractGeminiText(data);
+    cache?.set(imageUrl, text);
+    return text;
+  } catch {
+    cache?.set(imageUrl, '');
+    return '';
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function buildGeminiImagePart(imageUrl, signal) {
+  if (imageUrl.startsWith('data:image/')) {
+    const match = /^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/s.exec(imageUrl);
+    if (!match) return null;
+    return {
+      inlineData: {
+        mimeType: match[1],
+        data: match[2],
+      },
+    };
+  }
+
+  if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
+    return null;
+  }
+
+  const imageResponse = await fetch(imageUrl, {
+    method: 'GET',
+    signal,
+    keepalive: true,
+  });
+  if (!imageResponse.ok) return null;
+
+  const mimeType = sanitizeText(imageResponse.headers.get('content-type') ?? 'image/jpeg', 120).split(';')[0] || 'image/jpeg';
+  if (!mimeType.startsWith('image/')) return null;
+
+  const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_GEMINI_IMAGE_BYTES) return null;
+
+  return {
+    inlineData: {
+      mimeType,
+      data: uint8ToBase64(bytes),
+    },
+  };
+}
+
+function uint8ToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function extractGeminiText(data) {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return '';
+  return parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+    .join('')
+    .trim();
 }
 
 
