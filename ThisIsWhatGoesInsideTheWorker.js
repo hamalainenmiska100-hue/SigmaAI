@@ -25,6 +25,7 @@ const WIKIPEDIA_API_URL = 'https://en.wikipedia.org/w/api.php';
 const WIKIDATA_SEARCH_API_URL = 'https://www.wikidata.org/w/api.php';
 const WIKIDATA_ENTITY_DATA_BASE_URL = 'https://www.wikidata.org/wiki/Special:EntityData';
 const SEARCH_QUERY_SYSTEM_PROMPT = `You generate concise web search queries for Wikipedia and Wikidata.\nReturn ONLY valid JSON with this exact shape:\n{"wikipedia": ["query 1", "query 2"], "wikidata": ["query 1", "query 2"]}\nRules:\n- Keep each query directly relevant to the user request.\n- Use 1 to 3 queries per array.\n- Prefer entities, facts, events, places, people, products, laws, standards, and dates when relevant.\n- Keep queries short and specific.\n- No markdown, no prose, no explanations.`;
+const WIKIPEDIA_LATEST_HINT_REGEX = /\b(latest|today|current|recent|newest|update|updated|as of|right now|this week|this month|this year)\b/i;
 
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_HISTORY_ITEMS = 40;
@@ -182,6 +183,12 @@ async function handleChatRequest(request, env, waitUntil) {
     apiKey,
     userMessage: taggedMessage,
     chatHistory,
+  });
+
+  messages.push({
+    role: 'system',
+    content:
+      'You can receive live Wikipedia and Wikidata context from the system. If present, prioritize it over stale memory and use exact dates for time-sensitive answers.',
   });
 
   if (webContext) {
@@ -381,7 +388,8 @@ async function buildKnowledgeContext({ apiKey, userMessage, chatHistory }) {
 
   const wikiLines = wikipediaResults.map((item, index) => {
     const summary = item.snippet ? ` — ${item.snippet}` : '';
-    return `${index + 1}. ${item.title}${summary} (URL: ${item.url})`;
+    const seenAt = item.timestamp ? ` [indexed: ${item.timestamp}]` : '';
+    return `${index + 1}. ${item.title}${summary}${seenAt} (URL: ${item.url})`;
   });
 
   const wikidataLines = wikidataResults.map((item, index) => {
@@ -534,9 +542,18 @@ function fallbackSearchQueries(userMessage) {
   const base = sanitizeText(userMessage, 140);
   if (!base) return { wikipedia: [], wikidata: [] };
 
+  const compact = base.replace(/\s+/g, ' ').trim();
+  const withoutPunctuation = compact.replace(/[!?.,:;()\[\]{}]/g, ' ');
+  const titleCaseChunks = withoutPunctuation
+    .split(/\s+/)
+    .filter((token) => /^[A-Z][a-z0-9-]+$/.test(token))
+    .slice(0, 4);
+  const recentHint = WIKIPEDIA_LATEST_HINT_REGEX.test(base) ? ' latest' : '';
+  const focused = titleCaseChunks.join(' ').trim();
+
   return {
-    wikipedia: [base],
-    wikidata: [base],
+    wikipedia: uniqueNonEmpty([`${compact}${recentHint}`.trim(), focused && `${focused}${recentHint}`.trim()]),
+    wikidata: uniqueNonEmpty([compact, focused]),
   };
 }
 
@@ -550,6 +567,7 @@ async function searchWikipedia(queries) {
     url.searchParams.set('format', 'json');
     url.searchParams.set('list', 'search');
     url.searchParams.set('utf8', '1');
+    url.searchParams.set('origin', '*');
     url.searchParams.set('srlimit', '3');
     url.searchParams.set('srsearch', query);
 
@@ -561,9 +579,11 @@ async function searchWikipedia(queries) {
       const title = sanitizeText(item?.title, 200);
       if (!title) continue;
       const snippet = sanitizeText(stripHtml(item?.snippet), 240);
+      const timestamp = sanitizeText(item?.timestamp, 40);
       results.push({
         title,
         snippet,
+        timestamp,
         url: `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}`,
       });
       if (results.length >= 6) return dedupeBy(results, (entry) => entry.title.toLowerCase());
@@ -583,26 +603,33 @@ async function searchWikidata(queries) {
     url.searchParams.set('format', 'json');
     url.searchParams.set('language', 'en');
     url.searchParams.set('limit', '3');
+    url.searchParams.set('origin', '*');
     url.searchParams.set('search', query);
 
     const data = await fetchWithTimeoutJson(url.toString(), WIKI_FETCH_TIMEOUT_MS);
     const items = data?.search;
     if (!Array.isArray(items)) continue;
 
-    for (const item of items) {
-      const id = sanitizeText(item?.id, 32);
-      const label = sanitizeText(item?.label, 200);
-      if (!id || !label) continue;
+    const resolvedItems = await Promise.all(
+      items.map(async (item) => {
+        const id = sanitizeText(item?.id, 32);
+        const label = sanitizeText(item?.label, 200);
+        if (!id || !label) return null;
 
-      const entityDetails = await fetchWikidataEntityAliases(id);
-      results.push({
-        id,
-        label,
-        description: sanitizeText(item?.description, 240),
-        aliases: entityDetails,
-        url: sanitizeText(item?.concepturi, 400) || `https://www.wikidata.org/wiki/${id}`,
-      });
+        const entityDetails = await fetchWikidataEntityAliases(id);
+        return {
+          id,
+          label,
+          description: sanitizeText(item?.description, 240),
+          aliases: entityDetails,
+          url: sanitizeText(item?.concepturi, 400) || `https://www.wikidata.org/wiki/${id}`,
+        };
+      }),
+    );
 
+    for (const resolved of resolvedItems) {
+      if (!resolved) continue;
+      results.push(resolved);
       if (results.length >= 6) return dedupeBy(results, (entry) => entry.id);
     }
   }
@@ -631,6 +658,7 @@ async function fetchWithTimeoutJson(url, timeoutMs) {
       method: 'GET',
       headers: {
         Accept: 'application/json',
+        'User-Agent': 'SigmaAI/1.0 (https://github.com/sigmaai/sigma)',
       },
       signal: controller.signal,
       keepalive: true,
